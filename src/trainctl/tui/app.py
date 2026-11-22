@@ -6,13 +6,14 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
-from textual.widgets import Footer, Header, Sparkline, Static
+from textual.widgets import Footer, Header, Static
+from textual_plotext import PlotextPlot
 
 from ..client import Client
 from ..protocol import PROTOCOL_VERSION, History, Manifest, Message, MetricValue, Report
 from ..rundir import RunDir
 
-SPARKLINE_POINTS = 200
+PLOT_POINTS = 500
 RATE_WINDOW = 10
 
 
@@ -24,6 +25,14 @@ def format_value(value: float) -> str:
     return f"{value:.6f}"
 
 
+def step_ticks(first: int, last: int, count: int = 5) -> list[float]:
+    if last <= first:
+        return [first]
+    return sorted(
+        {round(first + (last - first) * i / (count - 1)) for i in range(count)}
+    )
+
+
 class MetricPanel(Vertical):
     DEFAULT_CSS = """
     MetricPanel {
@@ -32,33 +41,50 @@ class MetricPanel(Vertical):
         padding: 0 1;
         margin-bottom: 1;
     }
-    MetricPanel .value {height: auto; }
-    MetricPanel Sparkline {height: 3; margin-top: 1;}
+    MetricPanel .value { height: auto; }
+    MetricPanel PlotextPlot {height: 8; }
     """
 
     def __init__(self, metric_name: str):
         super().__init__()
         self.metric_name = metric_name
         self.border_title = metric_name
-        self.values: deque[float] = deque(maxlen=SPARKLINE_POINTS)
+        self.steps: deque[int] = deque(maxlen=PLOT_POINTS)
+        self.values: deque[float] = deque(maxlen=PLOT_POINTS)
 
     def compose(self) -> ComposeResult:
         yield Static("-", classes="value")
-        yield (Sparkline([], summary_function=max))
+        yield PlotextPlot()
 
-    def push(self, values: list[MetricValue]) -> None:
-        if not values:
+    def push(self, points: list[tuple[int, MetricValue]]) -> None:
+        if not points:
             return
-        latest = values[-1]
+        latest = points[-1][1]
         if isinstance(latest, list):
             self.query_one(".value", Static).update(
                 " ".join(f"[{i}] {format_value(v)}" for i, v in enumerate(latest))
             )
             return
 
-        self.values.extend(v for v in values if not isinstance(v, list))
+        for step, value in points:
+            if not isinstance(value, list):
+                self.steps.append(step)
+                self.values.append(value)
         self.query_one(".value", Static).update(format_value(latest))
-        self.query_one(Sparkline).data = [v for v in self.values if math.isfinite(v)]
+        self.redraw()
+
+    def redraw(self) -> None:
+        finite = [(s, v) for s, v in zip(self.steps, self.values) if math.isfinite(v)]
+        plot = self.query_one(PlotextPlot)
+        plt = plot.plt
+        plt.clear_data()
+        plt.xlabel("Step")
+        if finite:
+            steps, values = zip(*finite)
+            plt.plot(steps, values, marker="braille")
+            ticks = step_ticks(steps[0], steps[-1])
+            plt.xticks(ticks, [f"{t:,}" for t in ticks])
+        plot.refresh()
 
 
 class TrainctlApp(App[None]):
@@ -155,7 +181,9 @@ class TrainctlApp(App[None]):
         if not reports:
             return
         for name, panel in self.panels.items():
-            panel.push([r.metrics[name] for r in reports if name in r.metrics])
+            panel.push(
+                [(r.step, r.metrics[name]) for r in reports if name in r.metrics]
+            )
 
         for r in reports:
             self.recent.append((r.step, r.time))
