@@ -6,9 +6,15 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, BinaryIO, ClassVar
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 4
 
 MetricValue = float | list[float]
+
+COMMAND_OPS = ("set_param", "pause", "resume", "action")
+
+PARAM_TYPES = ("int", "float", "bool", "str")
+_TRUE_STRINGS = ("true", "yes", "on", "1")
+_FALSE_STRINGS = ("false", "no", "off", "0")
 
 
 class ProtocolError(Exception):
@@ -68,12 +74,90 @@ _VIEW_TYPES: dict[str, type] = {cls.KIND: cls for cls in (Value, Rate, Plot)}
 
 
 @dataclass
+class Param:
+    name: str
+    type: str
+    default: Any
+    min: float | None = None
+    max: float | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.type, type):
+            self.type = self.type.__name__
+        if self.type not in PARAM_TYPES:
+            raise ValueError(
+                f"Param {self.name!r}: type must be one of {PARAM_TYPES}, got {self.type!r}"
+            )
+        if self.type not in ("int", "float") and (
+            self.min is not None or self.max is not None
+        ):
+            raise ValueError(
+                f"Param {self.name!r}: min and max only apply to int and float params"
+            )
+
+        try:
+            self.default = self.coerce(self.default)
+        except ValueError as e:
+            raise ValueError(
+                f"Param {self.name!r} has an invalid default: {e}"
+            ) from None
+
+    def coerce(self, value: Any) -> Any:
+        result: Any
+        if self.type == "bool":
+            if isinstance(value, bool):
+                result = value
+            elif isinstance(value, str) and value.strip().lower() in _TRUE_STRINGS:
+                result = True
+            elif isinstance(value, str) and value.strip().lower() in _FALSE_STRINGS:
+                result = False
+            else:
+                raise ValueError(f"expected a bool, got {value!r}")
+        elif self.type == "int":
+            if isinstance(value, int) and not isinstance(value, bool):
+                result = value
+            elif isinstance(value, float) and value.is_integer():
+                result = int(value)
+            elif isinstance(value, str):
+                try:
+                    result = int(value.strip())
+                except ValueError:
+                    raise ValueError(f"expected an int, got {value!r}") from None
+            else:
+                raise ValueError(f"expected an int, got {value!r}")
+        elif self.type == "float":
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                result = float(value)
+            elif isinstance(value, str):
+                try:
+                    result = float(value.strip())
+                except ValueError:
+                    raise ValueError(f"expected a float, got {value!r}") from None
+            else:
+                raise ValueError(f"expected a float, got {value!r}")
+        else:
+            if not isinstance(value, str):
+                raise ValueError(f"expected a str, got {value!r}")
+            result = value
+
+        if self.min is not None and result < self.min:
+            raise ValueError(f"{result} is below the minimum {self.min}")
+        if self.max is not None and result > self.max:
+            raise ValueError(f"{result} is above the maximum {self.max}")
+        return result
+
+
+@dataclass
 class Manifest:
     TYPE: ClassVar[str] = "manifest"
 
     run_name: str
     metrics: list[str]
     views: list[View] = field(default_factory=list)
+    params: list[Param] = field(default_factory=list)
+    actions: list[str] = field(default_factory=list)
+    pausable: bool = False
+
     protocol_version: int = PROTOCOL_VERSION
 
 
@@ -92,7 +176,32 @@ class History:
     reports: list[Report] = field(default_factory=list)
 
 
-Message = Manifest | Report | History
+@dataclass
+class State:
+    TYPE: ClassVar[str] = "state"
+
+    params: dict[str, Any] = field(default_factory=dict)
+    paused: bool = False
+
+
+@dataclass
+class Command:
+    TYPE: ClassVar[str] = "command"
+
+    op: str
+    name: str | None = None
+    value: Any = None
+
+
+@dataclass
+class Notice:
+    TYPE: ClassVar[str] = "notice"
+
+    level: str
+    text: str
+
+
+Message = Manifest | Report | History | State | Command | Notice
 
 
 def _view_to_dict(view: View) -> dict[str, Any]:
@@ -134,12 +243,17 @@ def decode(line: bytes | str) -> Message:
     try:
         if kind == Manifest.TYPE:
             views = [_view_from_dict(v) for v in data.get("views", [])]
-            return _build(Manifest, {**data, "views": views})
+            params = [_build(Param, p) for p in data.get("params", [])]
+            return _build(Manifest, {**data, "views": views, "params": params})
         if kind == Report.TYPE:
             return _build(Report, data)
         if kind == History.TYPE:
             return History(reports=[_build(Report, r) for r in data.get("reports", [])])
-    except (TypeError, AttributeError) as e:
+        if kind == State.TYPE:
+            return _build(State, data)
+        if kind == Command.TYPE:
+            return _build(Command, data)
+    except (TypeError, AttributeError, ValueError) as e:
         raise ProtocolError(f"Malformed {kind!r} message: {e}") from e
     raise UnknownMessageType(f"Unknown message type: {kind!r}")
 
@@ -157,3 +271,34 @@ def read_message(stream: BinaryIO) -> Iterator[Message]:
             yield decode(line)
         except UnknownMessageType:
             continue
+
+
+class MessageDecoder:
+    def __init__(self, max_line: int = 1 << 20):
+        self._buffer = bytearray()
+        self._max_line = max_line
+
+    def feed(self, data: bytes) -> list[Message]:
+        self._buffer += data
+        messages: list[Message] = []
+
+        while True:
+            end = self._buffer.find(b"\n")
+            if end < 0:
+                break
+
+            line = bytes(self._buffer[:end]).strip()
+            del self._buffer[: end + 1]
+
+            if not line:
+                continue
+
+            try:
+                messages.append(decode(line))
+            except UnknownMessageType:
+                continue
+
+        if len(self._buffer) > self._max_line:
+            raise ProtocolError(f"Line longer than {self._max_line} bytes")
+
+        return messages

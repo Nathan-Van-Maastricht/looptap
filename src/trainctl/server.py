@@ -9,11 +9,25 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
-from .protocol import History, Manifest, Message, Report, send_message
+from .protocol import (
+    COMMAND_OPS,
+    Command,
+    History,
+    Manifest,
+    Message,
+    MessageDecoder,
+    Notice,
+    ProtocolError,
+    Report,
+    State,
+    send_message,
+)
 
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 0.5
+_RECV_SIZE = 65536
+_MAX_PENDING_COMMANDS = 1000
 
 
 class _ClientConnection:
@@ -23,18 +37,24 @@ class _ClientConnection:
         initial: list[Message],
         queue_size: int,
         on_done: Callable[[_ClientConnection], None],
+        on_command: Callable[[Command], None],
     ):
         self.sock = sock
         self._initial = initial
         self._queue: queue.Queue[Message] = queue.Queue(maxsize=queue_size)
         self._closing = threading.Event()
         self._on_done = on_done
+        self._on_command = on_command
         self.thread = threading.Thread(
-            target=self._run, name="trainctl-client", daemon=True
+            target=self._run, name="trainctl-client-send", daemon=True
+        )
+        self.reader = threading.Thread(
+            target=self._read, name="trainctl-client-recv", daemon=True
         )
 
     def start(self) -> None:
         self.thread.start()
+        self.reader.start()
 
     def offer(self, message: Message) -> bool:
         try:
@@ -72,12 +92,43 @@ class _ClientConnection:
             log.debug(f"client disconnected: {e}")
         finally:
             self._closing.set()
+
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
             try:
                 self.sock.close()
             except OSError:
                 pass
 
             self._on_done(self)
+
+    def _read(self) -> None:
+        decoder = MessageDecoder()
+
+        try:
+            while not self._closing.is_set():
+                try:
+                    data = self.sock.recv(_RECV_SIZE)
+                except TimeoutError:
+                    continue
+
+                if not data:
+                    break
+
+                for message in decoder.feed(data):
+                    if isinstance(message, Command):
+                        self._on_command(message)
+                    else:
+                        log.warning(f"Ignoring {message.TYPE} message sent by a client")
+        except ProtocolError as e:
+            log.warning(f"Disconnecting a client that sent a bad message: {e}")
+        except OSError:
+            pass
+        finally:
+            self.abort()
 
 
 class Server:
@@ -97,6 +148,11 @@ class Server:
         self._lock = threading.Lock()
         self._history: deque[Report] = deque(maxlen=history_size)
         self._clients: set[_ClientConnection] = set()
+        self._state: State | None = None
+
+        self._commands: queue.Queue[Command] = queue.Queue(
+            maxsize=_MAX_PENDING_COMMANDS
+        )
 
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
@@ -122,19 +178,58 @@ class Server:
         self._accept_thread.start()
 
     def publish(self, report: Report) -> None:
-        too_slow = []
         with self._lock:
             self._history.append(report)
+            too_slow = self._offer_all(report)
 
-            for client in self._clients:
-                if not client.offer(report):
-                    too_slow.append(client)
+        self._drop(too_slow)
 
-            self._clients.difference_update(too_slow)
+    def publish_state(self, state: State) -> None:
+        with self._lock:
+            self._state = state
+            too_slow = self._offer_all(state)
+        self._drop(too_slow)
 
-        for client in too_slow:
-            log.warning("dropping a client that is not keeping up")
+    def take_comamnds(self) -> list[Command]:
+        commands: list[Command] = []
+
+        while True:
+            try:
+                commands.append(self._commands.get_nowait())
+            except queue.Empty:
+                return commands
+
+    def publish_notice(self, notice: Notice) -> None:
+        with self._lock:
+            too_slow = self._offer_all(notice)
+        self._drop(too_slow)
+
+    def wait_for_commands(self, timeout: float) -> list[Command]:
+        try:
+            first = self._commands.get(timeout=timeout)
+        except queue.Empty:
+            return []
+        return [first, *self.take_comamnds()]
+
+    def _offer_all(self, message: Message) -> list[_ClientConnection]:
+        too_slow = [client for client in self._clients if not client.offer(message)]
+        self._clients.difference_update(too_slow)
+        return too_slow
+
+    def _drop(self, clients: list[_ClientConnection]) -> None:
+        for client in clients:
+            log.warning("Dropping a client that is not keeping up")
             client.abort()
+
+    def _receive_command(self, command: Command) -> None:
+        if command.op not in COMMAND_OPS:
+            log.warning(f"Ignoring unknown command op {command.op}")
+            return
+
+        try:
+            self._commands.put_nowait(command)
+        except queue.Full:
+            log.warning(f"Command queue full, dropping a {command.op} command")
 
     def stop(self) -> None:
         self._stop.set()
@@ -154,6 +249,7 @@ class Server:
             client.thread.join(timeout=self.send_timeout + 2 * _POLL_INTERVAL)
             if client.thread.is_alive():
                 client.abort()
+            client.reader.join(timeout=2 * _POLL_INTERVAL)
 
         try:
             self.socket_path.unlink()
@@ -178,8 +274,14 @@ class Server:
                     self.manifest,
                     History(reports=list(self._history)),
                 ]
+                if self._state is not None:
+                    initial.append(self._state)
                 client = _ClientConnection(
-                    sock, initial, self.client_queue_size, self._remove
+                    sock,
+                    initial,
+                    self.client_queue_size,
+                    self._remove,
+                    self._receive_command,
                 )
                 self._clients.add(client)
             client.start()
