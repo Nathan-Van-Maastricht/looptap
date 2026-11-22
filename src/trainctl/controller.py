@@ -28,7 +28,7 @@ class Controller:
         self._warned: set[str] = set()
         self._metrics_file = open(rundir.metrics_path, "ab")  # noqa: SIM115
 
-    def report(self, step: int, metrics: Mapping[str, Any]) -> None:
+    def report(self, metrics: Mapping[str, Any]) -> None:
         values = {name: _to_metric_value(name, v) for name, v in metrics.items()}
 
         undeclared = values.keys() - self._declared - self._warned
@@ -39,7 +39,7 @@ class Controller:
             )
             self._warned |= undeclared
 
-        report = Report(step=int(step), time=time.time(), metrics=values)
+        report = Report(time=time.time(), metrics=values)
         self._metrics_file.write(encode(report))
         self._metrics_file.flush()
         self._server.publish(report)
@@ -51,7 +51,7 @@ class Controller:
 class NullController:
     """Used for headless mode"""
 
-    def report(self, step: int, metrics: Mapping[str, Any]) -> None:
+    def report(self, metrics: Mapping[str, Any]) -> None:
         pass
 
     def close(self) -> None:

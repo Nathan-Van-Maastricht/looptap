@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, BinaryIO, ClassVar
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 MetricValue = float | list[float]
 
@@ -20,26 +20,74 @@ class UnknownMessageType(ProtocolError):
 
 
 @dataclass
+class Value:
+    KIND: ClassVar[str] = "value"
+
+    metric: str
+    label: str | None = None
+
+    def sources(self) -> list[str]:
+        return [self.metric]
+
+
+@dataclass
+class Rate:
+    KIND: ClassVar[str] = "rate"
+
+    metric: str
+    label: str | None = None
+    window: int = 10
+
+    def sources(self) -> list[str]:
+        return [self.metric]
+
+
+@dataclass
+class Plot:
+    KIND: ClassVar[str] = "plot"
+
+    x: str
+    y: str
+    title: str | None = None
+
+    def sources(self) -> list[str]:
+        return [self.x, self.y]
+
+
+@dataclass
+class UnknownView:
+    kind: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def sources(self) -> list[str]:
+        return []
+
+
+View = Value | Rate | Plot | UnknownView
+_VIEW_TYPES: dict[str, type] = {cls.KIND: cls for cls in (Value, Rate, Plot)}
+
+
+@dataclass
 class Manifest:
-    Type: ClassVar[str] = "manifest"
+    TYPE: ClassVar[str] = "manifest"
 
     run_name: str
     metrics: list[str]
+    views: list[View] = field(default_factory=list)
     protocol_version: int = PROTOCOL_VERSION
 
 
 @dataclass
 class Report:
-    Type: ClassVar[str] = "report"
+    TYPE: ClassVar[str] = "report"
 
-    step: int
     time: float
     metrics: dict[str, MetricValue]
 
 
 @dataclass
 class History:
-    Type: ClassVar[str] = "history"
+    TYPE: ClassVar[str] = "history"
 
     reports: list[Report] = field(default_factory=list)
 
@@ -47,8 +95,25 @@ class History:
 Message = Manifest | Report | History
 
 
+def _view_to_dict(view: View) -> dict[str, Any]:
+    if isinstance(view, UnknownView):
+        return {"kind": view.kind, **view.data}
+    return {"kind": view.KIND, **asdict(view)}
+
+
+def _view_from_dict(data: dict[str, Any]) -> View:
+    data = dict(data)
+    kind = data.pop("kind", None)
+    cls = _VIEW_TYPES.get(kind)
+    if cls is None:
+        return UnknownView(kind=str(kind), data=data)
+    return _build(cls, data)
+
+
 def encode(message: Message) -> bytes:
-    payload = {"type": message.Type, **asdict(message)}
+    payload = {"type": message.TYPE, **asdict(message)}
+    if isinstance(message, Manifest):
+        payload["views"] = [_view_to_dict(v) for v in message.views]
     return (json.dumps(payload, separators=(",", ":")) + "\n").encode()
 
 
@@ -67,11 +132,12 @@ def decode(line: bytes | str) -> Message:
 
     kind = data.pop("type", None)
     try:
-        if kind == Manifest.Type:
-            return _build(Manifest, data)
-        if kind == Report.Type:
+        if kind == Manifest.TYPE:
+            views = [_view_from_dict(v) for v in data.get("views", [])]
+            return _build(Manifest, {**data, "views": views})
+        if kind == Report.TYPE:
             return _build(Report, data)
-        if kind == History.Type:
+        if kind == History.TYPE:
             return History(reports=[_build(Report, r) for r in data.get("reports", [])])
     except (TypeError, AttributeError) as e:
         raise ProtocolError(f"Malformed {kind!r} message: {e}") from e

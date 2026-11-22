@@ -4,28 +4,43 @@ from collections import deque
 
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
 from textual.widgets import Footer, Header, Static
 from textual_plotext import PlotextPlot
 
+from trainctl import Rate, Value
+
 from ..client import Client
-from ..protocol import PROTOCOL_VERSION, History, Manifest, Message, MetricValue, Report
+from ..protocol import (
+    PROTOCOL_VERSION,
+    History,
+    Manifest,
+    Message,
+    MetricValue,
+    Plot,
+    Report,
+    UnknownView,
+    View,
+)
 from ..rundir import RunDir
 
 PLOT_POINTS = 500
-RATE_WINDOW = 10
 
 
-def format_value(value: float) -> str:
+def format_value(value: MetricValue) -> str:
+    if isinstance(value, list):
+        return " ".join(f"[{i}] {format_value(v)}" for i, v in enumerate(value))
     if not math.isfinite(value):
         return str(value)
+    if value.is_integer() and abs(value) < 1e15:
+        return f"{int(value):,}"
     if value != 0 and (abs(value) < 1e-3 or abs(value) >= 1e5):
         return f"{value:.4e}"
     return f"{value:.6f}"
 
 
-def step_ticks(first: int, last: int, count: int = 5) -> list[float]:
+def int_ticks(first: int, last: int, count: int = 5) -> list[float]:
     if last <= first:
         return [first]
     return sorted(
@@ -33,58 +48,141 @@ def step_ticks(first: int, last: int, count: int = 5) -> list[float]:
     )
 
 
-class MetricPanel(Vertical):
+class ViewWidget(Vertical):
     DEFAULT_CSS = """
-    MetricPanel {
+    ViewWidget {
         height: auto;
         border: round $primary;
         padding: 0 1;
         margin-bottom: 1;
     }
-    MetricPanel .value { height: auto; }
-    MetricPanel PlotextPlot {height: 8; }
     """
 
-    def __init__(self, metric_name: str):
+    COMPACT = False
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        pass
+
+
+class ValueWidget(ViewWidget):
+    COMPACT = True
+
+    def __init__(self, view: Value):
         super().__init__()
-        self.metric_name = metric_name
-        self.border_title = metric_name
-        self.steps: deque[int] = deque(maxlen=PLOT_POINTS)
-        self.values: deque[float] = deque(maxlen=PLOT_POINTS)
+        self.view = view
+        self.border_title = view.label or view.metric
+
+    def compose(self) -> ComposeResult:
+        yield Static("-")
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        for report in reversed(reports):
+            if self.view.metric in report.metrics:
+                self.query_one(Static).update(
+                    format_value(report.metrics[self.view.metric])
+                )
+                return
+
+
+class RateWidget(ViewWidget):
+    COMPACT = True
+
+    def __init__(self, view: Rate):
+        super().__init__()
+        self.view = view
+        self.border_title = view.label or f"{view.metric}/s"
+        self.recent: deque[tuple[float, float]] = deque(maxlen=max(2, view.window))
+
+    def compose(self) -> ComposeResult:
+        yield Static("-")
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        for report in reports:
+            value = report.metrics.get(self.view.metric)
+            if isinstance(value, float) and math.isfinite(value):
+                self.recent.append((report.time, value))
+
+        if len(self.recent) < 2:
+            return
+        (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
+        if t1 > t0:
+            self.query_one(Static).update(f"{(v1 - v0) / (t1 - t0):,.2f}")
+
+
+class PlotWidget(ViewWidget):
+    DEFAULT_CSS = """
+    PlotWidget PlotextPlot {height: 8; }
+    """
+
+    def __init__(self, view: Plot):
+        super().__init__()
+        self.view = view
+        self.border_title = view.title or view.y
+        self.xs: deque[float] = deque(maxlen=PLOT_POINTS)
+        self.ys: deque[float] = deque(maxlen=PLOT_POINTS)
 
     def compose(self) -> ComposeResult:
         yield Static("-", classes="value")
         yield PlotextPlot()
 
-    def push(self, points: list[tuple[int, MetricValue]]) -> None:
-        if not points:
-            return
-        latest = points[-1][1]
-        if isinstance(latest, list):
-            self.query_one(".value", Static).update(
-                " ".join(f"[{i}] {format_value(v)}" for i, v in enumerate(latest))
-            )
+    def apply_reports(self, reports: list[Report]) -> None:
+        latest = None
+        for report in reports:
+            x = report.metrics.get(self.view.x)
+            y = report.metrics.get(self.view.y)
+
+            if y is not None:
+                latest = y
+
+            if isinstance(x, float) and isinstance(y, float):
+                self.xs.append(x)
+                self.ys.append(y)
+
+        if latest is None:
             return
 
-        for step, value in points:
-            if not isinstance(value, list):
-                self.steps.append(step)
-                self.values.append(value)
         self.query_one(".value", Static).update(format_value(latest))
         self.redraw()
 
     def redraw(self) -> None:
-        finite = [(s, v) for s, v in zip(self.steps, self.values) if math.isfinite(v)]
+        finite = [
+            (x, y)
+            for x, y in zip(self.xs, self.ys)
+            if math.isfinite(x) and math.isfinite(y)
+        ]
         plot = self.query_one(PlotextPlot)
         plt = plot.plt
         plt.clear_data()
-        plt.xlabel("Step")
+        plt.xlabel(self.view.x)
         if finite:
-            steps, values = zip(*finite)
-            plt.plot(steps, values, marker="braille")
-            ticks = step_ticks(steps[0], steps[-1])
-            plt.xticks(ticks, [f"{t:,}" for t in ticks])
+            xs, ys = zip(*finite)
+            plt.plot(xs, ys, marker="braille")
+
+            if all(x.is_integer() for x in xs):
+                ticks = int_ticks(int(min(xs)), int(max(xs)))
+                plt.xticks(ticks, [f"{t:,}" for t in ticks])
         plot.refresh()
+
+
+class UnknownViewWidget(ViewWidget):
+    def __init__(self, view: UnknownView):
+        super().__init__()
+        self.border_title = view.kind
+
+    def compose(self) -> ComposeResult:
+        yield Static("This TUI doesn't support this view")
+
+
+VIEW_WIDGETS: dict[type, type[ViewWidget]] = {
+    Value: ValueWidget,
+    Rate: RateWidget,
+    Plot: PlotWidget,
+    UnknownView: UnknownViewWidget,
+}
+
+
+def make_widget(view: View) -> ViewWidget:
+    return VIEW_WIDGETS[type(view)](view)  # type: ignore
 
 
 class TrainctlApp(App[None]):
@@ -92,7 +190,9 @@ class TrainctlApp(App[None]):
     BINDINGS = [("q", "quit", "Quit")]  # noqa: RUF012
     CSS = """
     #status { height: 1; padding: 0 1; background: $boost; }
-    #metrics { padding: 1 1 0 1; }
+    #compact { height: auto; padding: 1 1 0 1; }
+    #compact ViewWidget { width: 1fr; margin-right: 1; }
+    #plots { padding: 1 1 0 1; }
     """
 
     class Incoming(TextualMessage):
@@ -109,15 +209,16 @@ class TrainctlApp(App[None]):
         super().__init__()
         self.rundir = rundir
         self.client = Client(rundir)
-        self.panels: dict[str, MetricPanel] = {}
-        self.recent: deque[tuple[int, float]] = deque(maxlen=RATE_WINDOW)
+        self.view_widgets: list[ViewWidget] = []
+        self.last_report_time: float | None = None
         self.connected = False
         self.notice = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Connecting...", id="status")
-        yield VerticalScroll(id="metrics")
+        yield Horizontal(id="compact")
+        yield VerticalScroll(id="plots")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -171,35 +272,35 @@ class TrainctlApp(App[None]):
         if manifest.protocol_version != PROTOCOL_VERSION:
             self.notice = f"Protocol v{manifest.protocol_version}, TUI expects v{PROTOCOL_VERSION}"
 
-        container = self.query_one("#metrics", VerticalScroll)
-        await container.remove_children()
-        self.panels = {name: MetricPanel(name) for name in manifest.metrics}
-        await container.mount(*self.panels.values())
+        compact = self.query_one("#compact", Horizontal)
+        plots = self.query_one("#plots", VerticalScroll)
+        await compact.remove_children()
+        await plots.remove_children()
+
+        self.view_widgets = [make_widget(view) for view in manifest.views]
+        compact_widgets = [w for w in self.view_widgets if w.COMPACT]
+        await compact.mount(*compact_widgets)
+        await plots.mount(*(w for w in self.view_widgets if not w.COMPACT))
+        compact.display = bool(compact_widgets)
+        self.refresh_status()
+
         self.refresh_status()
 
     def apply_reports(self, reports: list[Report]) -> None:
         if not reports:
             return
-        for name, panel in self.panels.items():
-            panel.push(
-                [(r.step, r.metrics[name]) for r in reports if name in r.metrics]
-            )
 
-        for r in reports:
-            self.recent.append((r.step, r.time))
+        for widget in self.view_widgets:
+            widget.apply_reports(reports)
+        self.last_report_time = reports[-1].time
+
         self.refresh_status()
 
     def refresh_status(self) -> None:
         parts = ["● Live" if self.connected else "○ Disconnected"]
 
-        if self.recent:
-            step, t = self.recent[-1]
-            parts.append(f"Step {step:,}")
-            (s0, t0) = self.recent[0]
-            if len(self.recent) > 1 and t > t0:
-                parts.append(f"{(step - s0) / (t - t0):.2f} steps/s")
-            if self.connected:
-                parts.append(f"Last report {time.time() - t:.0f}s ago")
+        if self.connected and self.last_report_time is not None:
+            parts.append(f"Last report {time.time() - self.last_report_time:.0f}s ago")
 
         if self.notice:
             parts.append(self.notice)
