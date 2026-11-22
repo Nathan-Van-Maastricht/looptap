@@ -10,18 +10,21 @@ from textual.message import Message as TextualMessage
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
 from textual_plotext import PlotextPlot
 
-from src.trainctl.protocol import Command, Notice, Param, State
 from trainctl import Rate, Value
 
 from ..client import Client
 from ..protocol import (
     PROTOCOL_VERSION,
+    Command,
     History,
     Manifest,
     Message,
     MetricValue,
+    Notice,
+    Param,
     Plot,
     Report,
+    State,
     UnknownView,
     View,
 )
@@ -249,8 +252,13 @@ class ControlsPanel(VerticalScroll):
         super().__init__()
         self.manifest = manifest
         self.param_controls = {p.name: ParamControl(p) for p in manifest.params}
+        self.stop_armed = False
 
     def compose(self) -> ComposeResult:
+        stop = Button("Stop", id="stop", variant="error")
+        stop.display = False
+        yield stop
+
         if self.manifest.pausable:
             yield Button("Pause", id="pause-toggle", variant="warning")
         if self.param_controls:
@@ -273,6 +281,15 @@ class ControlsPanel(VerticalScroll):
     def set_enabled(self, enabled: bool) -> None:
         for widget in self.query("Button, Input, Switch"):
             widget.disabled = not enabled
+
+    def arm_stop(self) -> None:
+        self.stop_armed = True
+        self.query_one("#stop", Button).label = "Confirm stop"
+        self.set_timer(3.0, self.disarm_stop)
+
+    def disarm_stop(self) -> None:
+        self.stop_armed = False
+        self.query_one("#stop", Button).label = "Stop"
 
 
 class TrainctlApp(App[None]):
@@ -393,8 +410,7 @@ class TrainctlApp(App[None]):
             await self.controls.remove()
             self.controls = None
         if manifest.params or manifest.actions or manifest.pausable:
-            self.controls = ControlsPanel(manifest)
-            await self.query_one("#body", Horizontal).mount(self.controls)
+            await self.ensure_controls()
 
         self.refresh_bindings()
         self.refresh_status()
@@ -409,8 +425,15 @@ class TrainctlApp(App[None]):
 
         self.refresh_status()
 
-    def apply_state(self, state: State) -> None:
+    async def ensure_controls(self) -> None:
+        if self.controls is None and self.manifest is not None:
+            self.controls = ControlsPanel(self.manifest)
+            await self.query_one("#body", Horizontal).mount(self.controls)
+
+    async def apply_state(self, state: State) -> None:
         self.paused = state.paused
+        if state.resumable:
+            await self.ensure_controls()
         if self.controls is not None:
             self.controls.apply_state(state)
 
@@ -440,6 +463,15 @@ class TrainctlApp(App[None]):
     @on(Button.Pressed, "#pause-toggle")
     def pause_presed(self) -> None:
         self.action_toggle_pause()
+
+    @on(Button.Pressed, "#stop")
+    def stop_pressed(self) -> None:
+        assert self.controls is not None
+        if not self.controls.stop_armed:
+            self.controls.arm_stop()
+            return
+        self.controls.disarm_stop()
+        self.send(Command("stop"))
 
     @on(Button.Pressed, ".action")
     def action_pressed(self, event: Button.Pressed) -> None:

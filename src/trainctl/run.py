@@ -1,11 +1,14 @@
 import argparse
 import os
+import shlex
+import signal
 import sys
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
 
-from .controller import Controller, NullController
+from .controller import Controller, NullController, StopRun
 from .protocol import Manifest, Param, Plot, Rate, Value, View
 from .rundir import DEFAULT_ROOT, RunDir
 from .server import Server
@@ -18,8 +21,37 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--worker", action="store_true")
     mode.add_argument("--headless", action="store_true")
+    parser.add_argument("--resume", metavar="DIR")
     args, _ = parser.parse_known_args(argv)
+    if args.headless and args.resume:
+        parser.error("--resume can't be combined with --headless")
     return args
+
+
+def _install_sigterm_handler() -> Callable[[], None]:
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def handler(signum: int, frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+    return lambda: signal.signal(signal.SIGTERM, previous)  # type: ignore
+
+
+def _resume_command(argv: Sequence[str], rundir: RunDir) -> str:
+    kept: list[str] = []
+    skip_next = False
+    for arg in argv:
+        if skip_next:
+            skip_next = False
+        elif arg == "--resume":
+            skip_next = True
+        elif not arg.startswith("--resume="):
+            kept.append(arg)
+    return shlex.join([sys.argv[0], *kept, "--resume", str(rundir.path)])
 
 
 def _validate_views(views: Sequence[View], metrics: Sequence[str]) -> None:
@@ -67,6 +99,7 @@ def run[T](
     _validate_views(views, metrics)
     _validate_controls(params, actions)
     args = _parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
 
     if args.headless:
         null = NullController(params)
@@ -75,7 +108,17 @@ def run[T](
         finally:
             null.close()
 
-    rundir = RunDir.create(name or Path(sys.argv[0]).stem or "run", runs_root)
+    resume_from: Path | None = None
+    if args.resume:
+        rundir = RunDir(args.resume)
+        resume_from = rundir.resume_checkpoint()
+        if resume_from is None:
+            raise SystemExit(
+                f"Nothing to resume: {rundir.path} has no complete checkpoint"
+            )
+    else:
+        rundir = RunDir.create(name or Path(sys.argv[0]).stem or "run", runs_root)
+
     manifest = Manifest(
         run_name=rundir.name,
         metrics=list(metrics),
@@ -86,16 +129,33 @@ def run[T](
     )
     rundir.write_manifest(manifest)
 
-    server = Server(rundir.socket_path, manifest, history_size=history_size)
+    server = Server(
+        rundir.socket_path,
+        manifest,
+        history_size=history_size,
+        initial_history=rundir.read_reports(history_size) if resume_from else (),
+    )
+    restore_sigterm = _install_sigterm_handler()
     server.start()
 
     try:
-        ctl = Controller(rundir, server, metrics, params, actions, pausable)
+        ctl = Controller(
+            rundir, server, metrics, params, actions, pausable, resume_from
+        )
         print(f"[trainctl] run directory: {rundir.path}", file=sys.stderr)
+        if resume_from is not None:
+            print(f"[trainctl] resuming from: {resume_from}", file=sys.stderr)
         print(f"trainctl] attach with: trainctl {rundir.path}", file=sys.stderr)
         try:
             return main(ctl)
+        except StopRun:
+            ctl.close()
         finally:
             ctl.close()
     finally:
         server.stop()
+        restore_sigterm()
+
+    print("[trainctl] stopped with a checkpoint. Resume with:", file=sys.stderr)
+    print(f"    {_resume_command(argv, rundir)}", file=sys.stderr)
+    raise SystemExit(0)

@@ -1,10 +1,14 @@
 import hashlib
+import json
 import os
+import shutil
+from collections import deque
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Self
 
-from .protocol import Manifest, decode, encode
+from .protocol import Manifest, ProtocolError, Report, decode, encode
 
 DEFAULT_ROOT = Path("runs")
 
@@ -18,6 +22,8 @@ class RunDir:
     MANIFEST = "manifest.json"
     METRICS = "metrics.jsonl"
     SOCKET = "control.sock"
+    CHECKPOINT = "checkpoint"
+    CONTROLLER_STATE = "controller.json"
 
     def __init__(self, path: str | os.PathLike[str]):
         self.path = Path(path).resolve()
@@ -58,6 +64,62 @@ class RunDir:
 
         digest = hashlib.sha1(os.fsencode(self.path)).hexdigest()[:16]
         return _SOCKET_FALLBACK_DIR / f"trainctl-{digest}.sock"
+
+    @property
+    def checkpoint_dir(self) -> Path:
+        return self.path / self.CHECKPOINT
+
+    def _complete(self, directory: Path) -> bool:
+        return (directory / self.CONTROLLER_STATE).is_file()
+
+    def resume_checkpoint(self) -> Path | None:
+        for directory in (self.checkpoint_dir, self.path / f"{self.CHECKPOINT}.old"):
+            if self._complete(directory):
+                return directory
+        return None
+
+    def write_checkpoint(
+        self, save: Callable[[Path], None], controller_state: dict
+    ) -> None:
+        """Save a checkpoint without ever leaving a half-written one in place.
+
+        save() writes the loop's files into a temporary directory; controller.json
+        is written after it returns. Only then does the temporary directory
+        replace the previous checkpoint, so a crash mid-save leaves the old
+        checkpoint intact.
+        """
+        tmp = self.path / f"{self.CHECKPOINT}.tmp"
+        old = self.path / f"{self.CHECKPOINT}.old"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        save(tmp)
+        (tmp / self.CONTROLLER_STATE).write_text(json.dumps(controller_state))
+        shutil.rmtree(old, ignore_errors=True)
+        if self.checkpoint_dir.exists():
+            self.checkpoint_dir.rename(old)
+        tmp.rename(self.checkpoint_dir)
+        shutil.rmtree(old, ignore_errors=True)
+
+    def read_controller_state(self, checkpoint: Path) -> dict:
+        return json.loads((checkpoint / self.CONTROLLER_STATE).read_text())
+
+    def read_reports(self, last: int) -> list[Report]:
+        """The last `last` reports from metrics.jsonl, oldest first.
+
+        Skips lines that don't decode, e.g. one cut short by a crash.
+        """
+        if not self.metrics_path.is_file():
+            return []
+        reports: deque[Report] = deque(maxlen=last)
+        with open(self.metrics_path, "rb") as f:
+            for line in f:
+                try:
+                    message = decode(line)
+                except ProtocolError:
+                    continue
+                if isinstance(message, Report):
+                    reports.append(message)
+        return list(reports)
 
     def write_manifest(self, manifest: Manifest) -> None:
         self.manifest_path.write_bytes(encode(manifest))

@@ -6,7 +6,7 @@ import queue
 import socket
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from .protocol import (
@@ -139,6 +139,7 @@ class Server:
         history_size: int = 500,
         client_queue_size: int = 256,
         send_timeout: float = 5.0,
+        initial_history: Iterable[Report] = (),
     ):
         self.socket_path = socket_path
         self.manifest = manifest
@@ -146,7 +147,7 @@ class Server:
         self.send_timeout = send_timeout
 
         self._lock = threading.Lock()
-        self._history: deque[Report] = deque(maxlen=history_size)
+        self._history: deque[Report] = deque(initial_history, maxlen=history_size)
         self._clients: set[_ClientConnection] = set()
         self._state: State | None = None
 

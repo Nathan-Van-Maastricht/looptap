@@ -6,11 +6,11 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, BinaryIO, ClassVar
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 MetricValue = float | list[float]
 
-COMMAND_OPS = ("set_param", "pause", "resume", "action")
+COMMAND_OPS = ("set_param", "pause", "resume", "action", "stop")
 
 PARAM_TYPES = ("int", "float", "bool", "str")
 _TRUE_STRINGS = ("true", "yes", "on", "1")
@@ -182,6 +182,7 @@ class State:
 
     params: dict[str, Any] = field(default_factory=dict)
     paused: bool = False
+    resumable: bool = False
 
 
 @dataclass
