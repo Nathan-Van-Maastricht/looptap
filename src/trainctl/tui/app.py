@@ -1,14 +1,16 @@
 import math
 import time
 from collections import deque
+from typing import Any
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
 from textual_plotext import PlotextPlot
 
+from src.trainctl.protocol import Command, Notice, Param, State
 from trainctl import Rate, Value
 
 from ..client import Client
@@ -185,6 +187,94 @@ def make_widget(view: View) -> ViewWidget:
     return VIEW_WIDGETS[type(view)](view)  # type: ignore
 
 
+_INPUT_TYPES = {"int": "integer", "float": "number", "str": "text"}
+
+
+class ParamControl(Vertical):
+    DEFAULT_CSS = """
+    ParamControl { height: auto; margin-bottom: 1; }
+    ParamControl .confirmed { color: $text-muted; }
+    """
+
+    def __init__(self, param: Param):
+        super().__init__()
+        self.param = param
+        self.confirmed: Any = param.default
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.param.name)
+        yield Static(self._describe(), classes="confirmed")
+        if self.param.type == "bool":
+            yield Switch(value=bool(self.confirmed))
+        else:
+            yield Input(value=str(self.confirmed), type=_INPUT_TYPES[self.param.type])  # type: ignore
+
+    def _describe(self) -> str:
+        limits = [
+            f"{label} {limit:g}"
+            for label, limit in (("min", self.param.min), ("max", self.param.max))
+            if limit is not None
+        ]
+
+        suffix = f"  ({', '.join(limits)})" if limits else ""
+        return f"current: {self.confirmed}{suffix}"
+
+    def set_confirmed(self, value: Any) -> None:
+        self.confirmed = value
+        self.query_one(".confirmed", Static).update(self._describe())
+        if self.param.type == "bool":
+            switch = self.query_one(Switch)
+            if switch.value != value:
+                switch.value = bool(value)
+        else:
+            text_input = self.query_one(Input)
+            if not text_input.has_focus:
+                text_input.value = str(value)
+
+
+class ControlsPanel(VerticalScroll):
+    DEFAULT_CSS = """
+    ControlsPanel {
+        width: 36;
+        height: 1fr;
+        border-left: solid $primary;
+        padding: 1 1 0 1;
+    }
+    ControlsPanel .heading { text-style: bold; margin-bottom: 1; }
+    ControlsPanel Button { width: 100%; margin-bottom: 1; }
+    ControlsPanel Input { margin-top: 1; }
+    """
+
+    def __init__(self, manifest: Manifest):
+        super().__init__()
+        self.manifest = manifest
+        self.param_controls = {p.name: ParamControl(p) for p in manifest.params}
+
+    def compose(self) -> ComposeResult:
+        if self.manifest.pausable:
+            yield Button("Pause", id="pause-toggle", variant="warning")
+        if self.param_controls:
+            yield Label("Params", classes="heading")
+            yield from self.param_controls.values()
+        if self.manifest.actions:
+            yield Label("Actions", classes="heading")
+            for action in self.manifest.actions:
+                yield Button(action, name=action, classes="action")
+
+    def apply_state(self, state: State) -> None:
+        if self.manifest.pausable:
+            self.query_one("#pause-toggle", Button).label = (
+                "Resume" if state.paused else "Pause"
+            )
+        for name, value in state.params.items():
+            if name in self.param_controls:
+                self.param_controls[name].set_confirmed(value)
+
+    def set_enabled(self, enabled: bool) -> None:
+        for widget in self.query("Button, Input, Switch"):
+            widget.disabled = not enabled
+
+
 class TrainctlApp(App[None]):
     TITLE = "trainctl"
     BINDINGS = [("q", "quit", "Quit")]  # noqa: RUF012
@@ -213,12 +303,16 @@ class TrainctlApp(App[None]):
         self.last_report_time: float | None = None
         self.connected = False
         self.notice = ""
+        self.manifest: Manifest | None = None
+        self.paused = False
+        self.controls: ControlsPanel | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Connecting...", id="status")
-        yield Horizontal(id="compact")
-        yield VerticalScroll(id="plots")
+        with Horizontal(id="body"), Vertical(id="main"):
+            yield Horizontal(id="compact")
+            yield VerticalScroll(id="plots")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -259,11 +353,22 @@ class TrainctlApp(App[None]):
             self.apply_reports(message.reports)
         elif isinstance(message, Report):
             self.apply_reports([message])
+        elif isinstance(message, State):
+            self.apply_state(message)
+        elif isinstance(message, Notice):
+            self.notify(
+                message.text,
+                severity="error" if message.level == "error" else "information",
+            )
 
     @on(Closed)
     def handle_closed(self, event: Closed) -> None:
         self.connected = False
         self.notice = event.reason
+
+        if self.controls is not None:
+            self.controls.set_enabled(False)
+        self.refresh_bindings()
         self.refresh_status()
 
     async def apply_manifest(self, manifest: Manifest) -> None:
@@ -282,8 +387,16 @@ class TrainctlApp(App[None]):
         await compact.mount(*compact_widgets)
         await plots.mount(*(w for w in self.view_widgets if not w.COMPACT))
         compact.display = bool(compact_widgets)
-        self.refresh_status()
 
+        self.manifest = manifest
+        if self.controls is not None:
+            await self.controls.remove()
+            self.controls = None
+        if manifest.params or manifest.actions or manifest.pausable:
+            self.controls = ControlsPanel(manifest)
+            await self.query_one("#body", Horizontal).mount(self.controls)
+
+        self.refresh_bindings()
         self.refresh_status()
 
     def apply_reports(self, reports: list[Report]) -> None:
@@ -296,10 +409,71 @@ class TrainctlApp(App[None]):
 
         self.refresh_status()
 
-    def refresh_status(self) -> None:
-        parts = ["● Live" if self.connected else "○ Disconnected"]
+    def apply_state(self, state: State) -> None:
+        self.paused = state.paused
+        if self.controls is not None:
+            self.controls.apply_state(state)
 
-        if self.connected and self.last_report_time is not None:
+        self.refresh_status()
+
+    def send(self, command: Command) -> None:
+        if not self.connected:
+            self.notify("Not connected", severity="warning")
+            return
+
+        try:
+            self.client.send(command)
+        except OSError as e:
+            self.notify(f"Could not send: {e}", severity="error")
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_pause":
+            if self.manifest is None or not self.manifest.pausable:
+                return False
+            return True if self.connected else None
+
+        return True
+
+    def action_toggle_pause(self) -> None:
+        self.send(Command("resume" if self.paused else "pause"))
+
+    @on(Button.Pressed, "#pause-toggle")
+    def pause_presed(self) -> None:
+        self.action_toggle_pause()
+
+    @on(Button.Pressed, ".action")
+    def action_pressed(self, event: Button.Pressed) -> None:
+        self.send(Command("action", event.button.name))
+
+    @on(Input.Submitted)
+    def param_submitted(self, event: Input.Submitted) -> None:
+        control = event.input.parent
+        if isinstance(control, ParamControl):
+            self.submit_param(control, event.value)
+
+    @on(Switch.Changed)
+    def param_switched(self, event: Switch.Changed) -> None:
+        control = event.switch.parent
+        if isinstance(control, ParamControl) and event.value != control.confirmed:
+            self.submit_param(control, event.value)
+
+    def submit_param(self, control: ParamControl, raw: Any) -> None:
+        try:
+            value = control.param.coerce(raw)
+        except ValueError as e:
+            self.notify(f"{control.param.name}: {e}", severity="error")
+            return
+        self.send(Command("set_param", control.param.name, value))
+
+    def refresh_status(self) -> None:
+        if not self.connected:
+            parts = ["○ Disconnected"]
+        elif self.paused:
+            parts = ["⏸ Paused"]
+        else:
+            parts = ["● Live"]
+
+        if self.connected and not self.paused and self.last_report_time is not None:
             parts.append(f"Last report {time.time() - self.last_report_time:.0f}s ago")
 
         if self.notice:
