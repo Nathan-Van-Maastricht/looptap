@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-tui = ["textual>=0.80"]
+tui = ["textual>=0.80","textual-plotext>=1.0"]
 
 [project.scripts]
 trainctl = "trainctl.tui:main"
