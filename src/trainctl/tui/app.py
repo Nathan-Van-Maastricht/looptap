@@ -371,7 +371,7 @@ class TrainctlApp(App[None]):
         elif isinstance(message, Report):
             self.apply_reports([message])
         elif isinstance(message, State):
-            self.apply_state(message)
+            await self.apply_state(message)
         elif isinstance(message, Notice):
             self.notify(
                 message.text,
