@@ -144,7 +144,13 @@ class Controller:
             Notice(level="info", text="stopping: saving checkpoint")
         )
         try:
-            self._rundir.write_checkpoint(self._save, {"params": dict(self._values)})
+            self._rundir.write_checkpoint(
+                self._save,
+                {
+                    "params": dict(self._values),
+                    "metrics_offset": self._metrics_file.tell(),
+                },
+            )
         except Exception as e:  # noqa: BLE001 - a failed save must not lose the run
             traceback.print_exc(file=sys.stderr)
             self._server.publish_notice(

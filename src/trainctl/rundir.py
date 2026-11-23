@@ -25,6 +25,7 @@ class RunDir:
     CHECKPOINT = "checkpoint"
     LAUNCH = "launch.json"
     WORKER_LOG = "worker.log"
+    DISCARDED_METRICS = "metrics.discarded.jsonl"
     CONTROLLER_STATE = "controller.json"
 
     def __init__(self, path: str | os.PathLike[str]):
@@ -132,6 +133,24 @@ class RunDir:
 
     def read_controller_state(self, checkpoint: Path) -> dict:
         return json.loads((checkpoint / self.CONTROLLER_STATE).read_text())
+
+    def rewind_metrics(self, offset: int) -> int:
+        if not self.metrics_path.is_file():
+            return 0
+
+        with open(self.metrics_path, "r+b") as f:
+            f.seek(offset)
+            tail = f.read()
+            if not tail:
+                return 0
+
+            with open(self.path / self.DISCARDED_METRICS, "ab") as discarded:
+                discarded.write(tail)
+                discarded.flush()
+                os.fsync(discarded.fileno())
+
+            f.truncate(offset)
+        return len(tail)
 
     def read_reports(self, last: int) -> list[Report]:
         """The last `last` reports from metrics.jsonl, oldest first.

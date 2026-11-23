@@ -122,6 +122,15 @@ def run[T](
             raise SystemExit(
                 f"Nothing to resume: {rundir.path} has no complete checkpoint"
             )
+
+        offset = rundir.read_controller_state(resume_from).get("metrics_offset")
+        if offset is not None:
+            discarded = rundir.rewind_metrics(offset)
+            if discarded:
+                print(
+                    f"[trainctl] set aside {discarded} bytes of reports from after the checkpoint in {rundir.DISCARDED_METRICS}",
+                    file=sys.stderr,
+                )
     else:
         rundir = RunDir.create(name or Path(sys.argv[0]).stem or "run", runs_root)
 
