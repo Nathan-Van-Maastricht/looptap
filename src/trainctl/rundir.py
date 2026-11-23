@@ -23,6 +23,8 @@ class RunDir:
     METRICS = "metrics.jsonl"
     SOCKET = "control.sock"
     CHECKPOINT = "checkpoint"
+    LAUNCH = "launch.json"
+    WORKER_LOG = "worker.log"
     CONTROLLER_STATE = "controller.json"
 
     def __init__(self, path: str | os.PathLike[str]):
@@ -64,6 +66,34 @@ class RunDir:
 
         digest = hashlib.sha1(os.fsencode(self.path)).hexdigest()[:16]
         return _SOCKET_FALLBACK_DIR / f"trainctl-{digest}.sock"
+
+    @property
+    def launch_path(self) -> Path:
+        return self.path / self.LAUNCH
+
+    @property
+    def worker_log_path(self) -> Path:
+        return self.path / self.WORKER_LOG
+
+    def write_launch(self, argv: list[str], cwd: str) -> None:
+        fd = os.open(self.launch_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"argv": argv, "cwd": cwd}, f)
+
+    def read_launch(self) -> dict | None:
+        try:
+            launch = json.loads(self.launch_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+        if (
+            not isinstance(launch, dict)
+            or not launch.get("argv")
+            or "cwd" not in launch
+        ):
+            return None
+
+        return launch
 
     @property
     def checkpoint_dir(self) -> Path:

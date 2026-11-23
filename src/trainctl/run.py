@@ -41,17 +41,24 @@ def _install_sigterm_handler() -> Callable[[], None]:
     return lambda: signal.signal(signal.SIGTERM, previous)  # type: ignore
 
 
-def _resume_command(argv: Sequence[str], rundir: RunDir) -> str:
+def _strip_trainctl_args(argv: Sequence[str]) -> list[str]:
     kept: list[str] = []
     skip_next = False
+
     for arg in argv:
         if skip_next:
             skip_next = False
         elif arg == "--resume":
             skip_next = True
-        elif not arg.startswith("--resume="):
+        elif arg not in ("--worker", "--headless") and not arg.startswith("--resume="):
             kept.append(arg)
-    return shlex.join([sys.argv[0], *kept, "--resume", str(rundir.path)])
+    return kept
+
+
+def _resume_command(rundir: RunDir) -> str:
+    launch = rundir.read_launch()
+    argv = launch["argv"] if launch else _strip_trainctl_args(sys.orig_argv)
+    return shlex.join([*argv, "--resume", str(rundir.path)])
 
 
 def _validate_views(views: Sequence[View], metrics: Sequence[str]) -> None:
@@ -99,7 +106,6 @@ def run[T](
     _validate_views(views, metrics)
     _validate_controls(params, actions)
     args = _parse_args(argv)
-    argv = list(sys.argv[1:] if argv is None else argv)
 
     if args.headless:
         null = NullController(params)
@@ -129,6 +135,9 @@ def run[T](
     )
     rundir.write_manifest(manifest)
 
+    if resume_from is None or rundir.read_launch() is None:
+        rundir.write_launch(_strip_trainctl_args(sys.orig_argv), os.getcwd())
+
     server = Server(
         rundir.socket_path,
         manifest,
@@ -157,5 +166,5 @@ def run[T](
         restore_sigterm()
 
     print("[trainctl] stopped with a checkpoint. Resume with:", file=sys.stderr)
-    print(f"    {_resume_command(argv, rundir)}", file=sys.stderr)
+    print(f"    {_resume_command(rundir)}", file=sys.stderr)
     raise SystemExit(0)

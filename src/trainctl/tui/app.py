@@ -1,4 +1,5 @@
 import math
+import subprocess
 import time
 from collections import deque
 from typing import Any
@@ -9,6 +10,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
+from textual.worker import get_current_worker
 from textual_plotext import PlotextPlot
 
 from ..client import Client
@@ -30,8 +32,10 @@ from ..protocol import (
     View,
 )
 from ..rundir import RunDir
+from ..supervisor import log_tail, resume
 
 PLOT_POINTS = 500
+STARTUP_TIMEOUT = 600.0
 
 
 def format_value(value: MetricValue) -> str:
@@ -312,6 +316,8 @@ class TrainctlApp(App[None]):
     #plots { padding: 1 1 0 1; }
     #body { height: 1fr; }
     #main { width: 1fr; }
+    #resume-bar { height: auto; padding: 0 1; display: none; }
+    #resume-text { width: 1fr; height: 3; content-align: left middle; }
     """
 
     class Incoming(TextualMessage):
@@ -320,9 +326,10 @@ class TrainctlApp(App[None]):
             self.payload = payload
 
     class Closed(TextualMessage):
-        def __init__(self, reason: str):
+        def __init__(self, reason: str, show_log: bool = False):
             super().__init__()
             self.reason = reason
+            self.show_log = show_log
 
     def __init__(self, rundir: RunDir):
         super().__init__()
@@ -336,10 +343,18 @@ class TrainctlApp(App[None]):
         self.paused = False
         self.pause_target: bool | None = None
         self.controls: ControlsPanel | None = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self.starting = False
+        self.exiting = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Connecting...", id="status")
+
+        with Horizontal(id="resume-bar"):
+            yield Static("This run stopped with a checkpoint.", id="resume-text")
+            yield Button("Resume", id="resume", variant="success")
+
         with Horizontal(id="body"), Vertical(id="main"):
             yield Horizontal(id="compact")
             yield VerticalScroll(id="plots")
@@ -351,20 +366,48 @@ class TrainctlApp(App[None]):
         self.set_interval(1.0, self.refresh_status)
 
     def on_unmount(self) -> None:
+        self.exiting = True
         self.client.close()
 
     @work(thread=True, exclusive=True)
-    def listen(self) -> None:
-        try:
-            self.client.connect()
-        except FileNotFoundError:
-            self.post_message(
-                self.Closed("No Socket: the run has finished or not started")
-            )
-            return
-        except OSError as e:
-            self.post_message(self.Closed(f"Could not connect: {e}"))
-            return
+    def listen(self, wait_for_worker: float = 0.0) -> None:
+        worker = get_current_worker()
+        self.client = Client(self.rundir)
+        deadline = time.monotonic() + wait_for_worker
+
+        while True:
+            try:
+                self.client.connect()
+                break
+            except (
+                FileNotFoundError,
+                ConnectionRefusedError,
+            ) as e:
+                if worker.is_cancelled:
+                    return
+                exit_code = self.process.poll() if self.process is not None else None
+                if exit_code is not None:
+                    self.post_message(
+                        self.Closed(
+                            f"Worker exited with code {exit_code} while starting",
+                            show_log=True,
+                        )
+                    )
+                    return
+                if time.monotonic() < deadline:
+                    time.sleep(0.5)
+                    continue
+                if isinstance(e, ConnectionRefusedError):
+                    self.post_message(self.Closed(f"Could not connect: {e}"))
+                    return
+
+                self.post_message(
+                    self.Closed("No Socket: the run has finished or not started")
+                )
+                return
+            except OSError as e:
+                self.post_message(self.Closed(f"Could not connect: {e}"))
+                return
         try:
             for message in self.client.messages():
                 self.post_message(self.Incoming(message))
@@ -372,7 +415,17 @@ class TrainctlApp(App[None]):
             reason = "Worker closed the connection"
         except Exception as e:  # noqa: BLE001 - never crash UI
             reason = f"Connect error: {e}"
-        self.post_message(self.Closed(reason))
+        show_log = False
+        if self.process is not None and not self.exiting:
+            try:
+                code = self.process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code:
+                reason += f" (exit code {code}; see worker.log)"
+                show_log = True
+
+        self.post_message(self.Closed(reason, show_log=show_log))
 
     @on(Incoming)
     async def handle_incoming(self, event: Incoming) -> None:
@@ -394,6 +447,7 @@ class TrainctlApp(App[None]):
     @on(Closed)
     def handle_closed(self, event: Closed) -> None:
         self.connected = False
+        self.starting = False
         self.notice = event.reason
         self.pause_target = None
 
@@ -402,12 +456,30 @@ class TrainctlApp(App[None]):
 
         if self.controls is not None:
             self.controls.set_enabled(False)
+
+        if event.show_log:
+            self.notify(
+                "\n".join(log_tail(self.rundir)) or "worker.log is empty",
+                title="End of worker.log",
+                severity="error",
+                timeout=30,
+                markup=False,
+            )
+
+        self.update_resume_bar()
         self.refresh_bindings()
         self.refresh_status()
 
     async def apply_manifest(self, manifest: Manifest) -> None:
         self.connected = True
         self.sub_title = manifest.run_name
+        self.starting = False
+        self.notice = ""
+        self.paused = False
+        self.pause_target = None
+        self.last_report_time = None
+        self.update_resume_bar()
+
         if manifest.protocol_version != PROTOCOL_VERSION:
             self.notice = f"Protocol v{manifest.protocol_version}, TUI expects v{PROTOCOL_VERSION}"
 
@@ -500,6 +572,29 @@ class TrainctlApp(App[None]):
     def pause_pressed(self) -> None:
         self.action_toggle_pause()
 
+    def update_resume_bar(self) -> None:
+        resumable = (
+            not self.connected
+            and not self.starting
+            and self.rundir.resume_checkpoint() is not None
+            and self.rundir.read_launch() is not None
+        )
+        self.query_one("#resume-bar").display = resumable
+
+    @on(Button.Pressed, "#resume")
+    def resume_pressed(self) -> None:
+        try:
+            self.process = resume(self.rundir)
+        except (OSError, RuntimeError) as e:
+            self.notify(f"Could not start the worker: {e}", severity="error")
+            return
+
+        self.starting = True
+        self.notice = "waiting for the worker to start; its output goes to worker.log"
+        self.update_resume_bar()
+        self.refresh_status()
+        self.listen(wait_for_worker=STARTUP_TIMEOUT)
+
     @on(Button.Pressed, "#stop")
     def stop_pressed(self) -> None:
         assert self.controls is not None
@@ -534,7 +629,9 @@ class TrainctlApp(App[None]):
         self.send(Command("set_param", control.param.name, value))
 
     def refresh_status(self) -> None:
-        if not self.connected:
+        if self.starting:
+            parts = ["◌ Starting"]
+        elif not self.connected:
             parts = ["○ Disconnected"]
         elif self.paused:
             parts = ["⏸ Paused"]

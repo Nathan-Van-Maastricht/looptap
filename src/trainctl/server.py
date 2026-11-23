@@ -191,7 +191,7 @@ class Server:
             too_slow = self._offer_all(state)
         self._drop(too_slow)
 
-    def take_comamnds(self) -> list[Command]:
+    def take_commands(self) -> list[Command]:
         commands: list[Command] = []
 
         while True:
@@ -210,7 +210,7 @@ class Server:
             first = self._commands.get(timeout=timeout)
         except queue.Empty:
             return []
-        return [first, *self.take_comamnds()]
+        return [first, *self.take_commands()]
 
     def _offer_all(self, message: Message) -> list[_ClientConnection]:
         too_slow = [client for client in self._clients if not client.offer(message)]

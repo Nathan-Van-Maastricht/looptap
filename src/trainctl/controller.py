@@ -81,7 +81,7 @@ class Controller:
         self._stop_requested = False
         self._resume_from = resume_from
         self._loaded = False
-        self.resume = resume_from is not None
+        self.resuming = resume_from is not None
         if resume_from is not None:
             self._restore_params(
                 rundir.read_controller_state(resume_from).get("params", {})
@@ -127,7 +127,7 @@ class Controller:
         self._check_loaded()
 
         triggered: list[str] = []
-        self._apply(self._server.take_comamnds(), triggered)
+        self._apply(self._server.take_commands(), triggered)
 
         while True:
             while self._paused and not self._stop_requested:
@@ -157,7 +157,7 @@ class Controller:
         raise StopRun
 
     def _check_loaded(self) -> None:
-        if self.resume and not self._loaded:
+        if self.resuming and not self._loaded:
             raise RuntimeError(
                 "This run is resuming, but ctl.checkpoint() wasn't called before the loop started, so the checkpoint was never loaded."
             )
@@ -217,7 +217,11 @@ class Controller:
         return f"rejected {command.op}: unknown command"
 
     def _state(self) -> State:
-        return State(params=dict(self._values), paused=self._paused)
+        return State(
+            params=dict(self._values),
+            paused=self._paused,
+            resumable=self._save is not None,
+        )
 
     def close(self) -> None:
         self._metrics_file.close()
