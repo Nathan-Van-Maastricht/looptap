@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 _POLL_INTERVAL = 0.5
 _RECV_SIZE = 65536
 _MAX_PENDING_COMMANDS = 1000
+_READER_DRAIN_TIMEOUT = 1.0
 
 
 class _ClientConnection:
@@ -53,8 +54,8 @@ class _ClientConnection:
         )
 
     def start(self) -> None:
-        self.thread.start()
         self.reader.start()
+        self.thread.start()
 
     def offer(self, message: Message) -> bool:
         try:
@@ -75,6 +76,7 @@ class _ClientConnection:
             pass
 
     def _run(self) -> None:
+        send_failed = False
         try:
             for message in self._initial:
                 send_message(self.sock, message)
@@ -90,8 +92,12 @@ class _ClientConnection:
                 send_message(self.sock, message)
         except OSError as e:
             log.debug(f"client disconnected: {e}")
+            send_failed = True
         finally:
             self._closing.set()
+
+            if send_failed:
+                self.reader.join(timeout=_READER_DRAIN_TIMEOUT)
 
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
