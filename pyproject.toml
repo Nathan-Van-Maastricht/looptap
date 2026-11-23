@@ -1,5 +1,5 @@
 [project]
-name = "trainctl"
+name = "looptap"
 version = "0.5.0"
 description = "Add your description here"
 readme = "README.md"
@@ -13,7 +13,7 @@ dependencies = []
 tui = ["textual>=0.80","textual-plotext>=1.0"]
 
 [project.scripts]
-trainctl = "trainctl.tui:main"
+looptap = "looptap.tui:main"
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]

@@ -12,6 +12,24 @@ wheels = [
 ]
 
 [[package]]
+name = "looptap"
+version = "0.5.0"
+source = { editable = "." }
+
+[package.optional-dependencies]
+tui = [
+    { name = "textual" },
+    { name = "textual-plotext" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.80" },
+    { name = "textual-plotext", marker = "extra == 'tui'", specifier = ">=1.0" },
+]
+provides-extras = ["tui"]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -118,24 +136,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/9a/b0/e4e0f38df057db778
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/53/fba7da208f9d3f59254413660fa0aa6599f2aca806f3ae356670455fd4ea/textual_plotext-1.0.1-py3-none-any.whl", hash = "sha256:6b6bfd00b29f121ddf216eaaf9bdac9d688ed72f40028484d279a10cbbb169ed", size = 16558, upload-time = "2024-11-30T19:25:32.208Z" },
 ]
-
-[[package]]
-name = "trainctl"
-version = "0.5.0"
-source = { editable = "." }
-
-[package.optional-dependencies]
-tui = [
-    { name = "textual" },
-    { name = "textual-plotext" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=0.80" },
-    { name = "textual-plotext", marker = "extra == 'tui'", specifier = ">=1.0" },
-]
-provides-extras = ["tui"]
 
 [[package]]
 name = "typing-extensions"
