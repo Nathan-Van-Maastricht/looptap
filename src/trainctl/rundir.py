@@ -172,7 +172,7 @@ class RunDir:
 
     def read_last_report(self) -> Report | None:
         try:
-            f = open(self.metrics_path, "rb")
+            f = open(self.metrics_path, "rb")  # noqa: SIM115
         except FileNotFoundError:
             return None
 
@@ -193,10 +193,6 @@ class RunDir:
         return None
 
     def read_reports(self, last: int) -> list[Report]:
-        """The last `last` reports from metrics.jsonl, oldest first.
-
-        Skips lines that don't decode, e.g. one cut short by a crash.
-        """
         if not self.metrics_path.is_file():
             return []
         reports: deque[Report] = deque(maxlen=last)
