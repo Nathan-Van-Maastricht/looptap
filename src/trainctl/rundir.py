@@ -12,7 +12,7 @@ from .protocol import Manifest, ProtocolError, Report, decode, encode
 
 DEFAULT_ROOT = Path("runs")
 
-# Mac has 104 socket path length
+# Mac has 104 socket path length, Linux 108
 _MAX_SOCKET_PATH = 100
 
 _SOCKET_FALLBACK_DIR = Path("/tmp")
@@ -26,6 +26,7 @@ class RunDir:
     LAUNCH = "launch.json"
     WORKER_LOG = "worker.log"
     DISCARDED_METRICS = "metrics.discarded.jsonl"
+    STATUS = "status.json"
     CONTROLLER_STATE = "controller.json"
 
     def __init__(self, path: str | os.PathLike[str]):
@@ -151,6 +152,45 @@ class RunDir:
 
             f.truncate(offset)
         return len(tail)
+
+    @property
+    def status_path(self) -> Path:
+        return self.path / self.STATUS
+
+    def write_status(self, status: dict) -> None:
+        tmp = self.path / f"{self.STATUS}.tmp"
+        tmp.write_text(json.dumps(status))
+        os.replace(tmp, self.status_path)
+
+    def read_status(self) -> dict | None:
+        try:
+            status = json.loads(self.status_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+        return status if isinstance(status, dict) else None
+
+    def read_last_report(self) -> Report | None:
+        try:
+            f = open(self.metrics_path, "rb")
+        except FileNotFoundError:
+            return None
+
+        with f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().splitlines()
+
+        for line in reversed(lines):
+            try:
+                message = decode(line)
+            except ProtocolError:
+                continue
+
+            if isinstance(message, Report):
+                return message
+
+        return None
 
     def read_reports(self, last: int) -> list[Report]:
         """The last `last` reports from metrics.jsonl, oldest first.

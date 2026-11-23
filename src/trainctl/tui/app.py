@@ -2,6 +2,7 @@ import math
 import subprocess
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from textual import on, work
@@ -9,6 +10,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
+from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
 from textual.worker import get_current_worker
 from textual_plotext import PlotextPlot
@@ -20,7 +22,6 @@ from ..protocol import (
     History,
     Manifest,
     Message,
-    MetricValue,
     Notice,
     Param,
     Plot,
@@ -33,21 +34,11 @@ from ..protocol import (
 )
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
+from .formatting import format_value
+from .picker import PickerScreen
 
 PLOT_POINTS = 500
 STARTUP_TIMEOUT = 600.0
-
-
-def format_value(value: MetricValue) -> str:
-    if isinstance(value, list):
-        return " ".join(f"[{i}] {format_value(v)}" for i, v in enumerate(value))
-    if not math.isfinite(value):
-        return str(value)
-    if value.is_integer() and abs(value) < 1e15:
-        return f"{int(value):,}"
-    if value != 0 and (abs(value) < 1e-3 or abs(value) >= 1e5):
-        return f"{value:.4e}"
-    return f"{value:.6f}"
 
 
 def int_ticks(first: int, last: int, count: int = 5) -> list[float]:
@@ -306,9 +297,12 @@ class ControlsPanel(VerticalScroll):
         self.query_one("#stop", Button).label = "Stop"
 
 
-class TrainctlApp(App[None]):
-    TITLE = "trainctl"
-    BINDINGS = [("q", "quit", "Quit"), Binding("p", "toggle_pause", "Pause/Resume")]  # noqa: RUF012
+class RunScreen(Screen[None]):
+    BINDINGS = [  # noqa: RUF012
+        ("escape", "back", "Runs"),
+        ("q", "app.quit", "Quit"),
+        Binding("p", "toggle_pause", "Pause/Resume"),
+    ]
     CSS = """
     #status { height: 1; padding: 0 1; background: $boost; }
     #compact { height: auto; padding: 1 1 0 1; }
@@ -364,6 +358,9 @@ class TrainctlApp(App[None]):
         self.sub_title = self.rundir.name
         self.listen()
         self.set_interval(1.0, self.refresh_status)
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
     def on_unmount(self) -> None:
         self.exiting = True
@@ -645,3 +642,20 @@ class TrainctlApp(App[None]):
             parts.append(self.notice)
 
         self.query_one("#status", Static).update("  .  ".join(parts))
+
+
+class TrainctlApp(App[None]):
+    TITLE = "trainctl"
+
+    def __init__(self, root: str | Path, open_run: RunDir | None = None):
+        super().__init__()
+        self.root = root
+        self.initial_run = open_run
+
+    def on_mount(self) -> None:
+        self.push_screen(PickerScreen(self.root))
+        if self.initial_run is not None:
+            self.open_run(self.initial_run)
+
+    def open_run(self, rundir: RunDir) -> None:
+        self.push_screen(RunScreen(rundir))

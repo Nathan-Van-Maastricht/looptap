@@ -2,8 +2,10 @@ import argparse
 import os
 import shlex
 import signal
+import socket
 import sys
 import threading
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypeVar
@@ -154,6 +156,16 @@ def run[T](
         initial_history=rundir.read_reports(history_size) if resume_from else (),
     )
     restore_sigterm = _install_sigterm_handler()
+
+    status = {
+        "state": "running",
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "started": time.time(),
+    }
+    rundir.write_status(status)
+    outcome = "crashed"
+
     server.start()
 
     try:
@@ -163,16 +175,25 @@ def run[T](
         print(f"[trainctl] run directory: {rundir.path}", file=sys.stderr)
         if resume_from is not None:
             print(f"[trainctl] resuming from: {resume_from}", file=sys.stderr)
-        print(f"trainctl] attach with: trainctl {rundir.path}", file=sys.stderr)
+        print(f"[trainctl] attach with:   trainctl {rundir.path}", file=sys.stderr)
         try:
-            return main(ctl)
+            result = main(ctl)
+            outcome = "finished"
+            return result
         except StopRun:
-            ctl.close()
+            outcome = "stopped"
+        except KeyboardInterrupt:
+            outcome = "interrupted"
+            raise
+        except SystemExit as e:
+            outcome = "terminated" if e.code == 128 + signal.SIGTERM else "exited"
+            raise
         finally:
             ctl.close()
     finally:
         server.stop()
         restore_sigterm()
+        rundir.write_status({**status, "state": outcome, "ended": time.time()})
 
     print("[trainctl] stopped with a checkpoint. Resume with:", file=sys.stderr)
     print(f"    {_resume_command(rundir)}", file=sys.stderr)

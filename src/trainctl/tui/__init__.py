@@ -3,15 +3,15 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from ..rundir import DEFAULT_ROOT, RunDir, list_runs
+from ..rundir import DEFAULT_ROOT, RunDir
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="trainctl", description="Attach to a training run."
+        prog="trainctl", description="Browse and attach to training runs."
     )
     parser.add_argument(
-        "run", nargs="?", help="run directory (default: newest run in --root)"
+        "run", nargs="?", help="run directory to open (default: show the run picker)"
     )
     parser.add_argument(
         "--root", default=str(DEFAULT_ROOT), help="directory containing runs"
@@ -27,16 +27,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             ) from e
         raise
 
+    rundir = None  # new
     if args.run:
         rundir = RunDir(args.run)
         if not rundir.manifest_path.is_file():
             raise SystemExit(
                 f"Not a run directory (no {RunDir.MANIFEST}): {rundir.path}"
             )
-    else:
-        runs = list_runs(args.root)
-        if not runs:
-            raise SystemExit(f"No runs found in {args.root}")
-        rundir = runs[0]
 
-    TrainctlApp(rundir).run()
+    TrainctlApp(args.root, rundir).run()
