@@ -47,10 +47,10 @@ class _ClientConnection:
         self._on_done = on_done
         self._on_command = on_command
         self.thread = threading.Thread(
-            target=self._run, name="trainctl-client-send", daemon=True
+            target=self._run, name="looptap-client-send", daemon=True
         )
         self.reader = threading.Thread(
-            target=self._read, name="trainctl-client-recv", daemon=True
+            target=self._read, name="looptap-client-recv", daemon=True
         )
 
     def start(self) -> None:
@@ -180,7 +180,7 @@ class Server:
         self._listener = listener
 
         self._accept_thread = threading.Thread(
-            target=self._accept_loop, name="trainctl-accept", daemon=True
+            target=self._accept_loop, name="looptap-accept", daemon=True
         )
         self._accept_thread.start()
 

@@ -67,7 +67,7 @@ class RunDir:
             return preferred
 
         digest = hashlib.sha1(os.fsencode(self.path)).hexdigest()[:16]
-        return _SOCKET_FALLBACK_DIR / f"trainctl-{digest}.sock"
+        return _SOCKET_FALLBACK_DIR / f"looptap-{digest}.sock"
 
     @property
     def launch_path(self) -> Path:

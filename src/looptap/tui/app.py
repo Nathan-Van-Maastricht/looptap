@@ -644,8 +644,8 @@ class RunScreen(Screen[None]):
         self.query_one("#status", Static).update("  .  ".join(parts))
 
 
-class TrainctlApp(App[None]):
-    TITLE = "trainctl"
+class LooptapApp(App[None]):
+    TITLE = "looptap"
 
     def __init__(self, root: str | Path, open_run: RunDir | None = None):
         super().__init__()

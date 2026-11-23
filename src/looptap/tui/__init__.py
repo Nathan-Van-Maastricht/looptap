@@ -8,7 +8,7 @@ from ..rundir import DEFAULT_ROOT, RunDir
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="trainctl", description="Browse and attach to training runs."
+        prog="looptap", description="Browse and attach to training runs."
     )
     parser.add_argument(
         "run", nargs="?", help="run directory to open (default: show the run picker)"
@@ -19,11 +19,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     try:
-        from .app import TrainctlApp
+        from .app import LooptapApp
     except ModuleNotFoundError as e:
         if e.name and e.name.split(".")[0] == "textual":
             raise SystemExit(
-                "The trainctl TUI needs the 'tui' extra: uv add 'trainctl[tui]'"
+                "The looptap TUI needs the 'tui' extra: uv add 'looptap[tui]'"
             ) from e
         raise
 
@@ -35,4 +35,4 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"Not a run directory (no {RunDir.MANIFEST}): {rundir.path}"
             )
 
-    TrainctlApp(args.root, rundir).run()
+    LooptapApp(args.root, rundir).run()

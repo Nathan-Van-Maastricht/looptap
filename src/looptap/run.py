@@ -43,7 +43,7 @@ def _install_sigterm_handler() -> Callable[[], None]:
     return lambda: signal.signal(signal.SIGTERM, previous)  # type: ignore
 
 
-def _strip_trainctl_args(argv: Sequence[str]) -> list[str]:
+def _strip_looptap_args(argv: Sequence[str]) -> list[str]:
     kept: list[str] = []
     skip_next = False
 
@@ -59,7 +59,7 @@ def _strip_trainctl_args(argv: Sequence[str]) -> list[str]:
 
 def _resume_command(rundir: RunDir) -> str:
     launch = rundir.read_launch()
-    argv = launch["argv"] if launch else _strip_trainctl_args(sys.orig_argv)
+    argv = launch["argv"] if launch else _strip_looptap_args(sys.orig_argv)
     return shlex.join([*argv, "--resume", str(rundir.path)])
 
 
@@ -130,7 +130,7 @@ def run[T](
             discarded = rundir.rewind_metrics(offset)
             if discarded:
                 print(
-                    f"[trainctl] set aside {discarded} bytes of reports from after the checkpoint in {rundir.DISCARDED_METRICS}",
+                    f"[looptap] set aside {discarded} bytes of reports from after the checkpoint in {rundir.DISCARDED_METRICS}",
                     file=sys.stderr,
                 )
     else:
@@ -147,7 +147,7 @@ def run[T](
     rundir.write_manifest(manifest)
 
     if resume_from is None or rundir.read_launch() is None:
-        rundir.write_launch(_strip_trainctl_args(sys.orig_argv), os.getcwd())
+        rundir.write_launch(_strip_looptap_args(sys.orig_argv), os.getcwd())
 
     server = Server(
         rundir.socket_path,
@@ -172,10 +172,10 @@ def run[T](
         ctl = Controller(
             rundir, server, metrics, params, actions, pausable, resume_from
         )
-        print(f"[trainctl] run directory: {rundir.path}", file=sys.stderr)
+        print(f"[looptap] run directory: {rundir.path}", file=sys.stderr)
         if resume_from is not None:
-            print(f"[trainctl] resuming from: {resume_from}", file=sys.stderr)
-        print(f"[trainctl] attach with:   trainctl {rundir.path}", file=sys.stderr)
+            print(f"[looptap] resuming from: {resume_from}", file=sys.stderr)
+        print(f"[looptap] attach with:   looptap {rundir.path}", file=sys.stderr)
         try:
             result = main(ctl)
             outcome = "finished"
@@ -195,6 +195,6 @@ def run[T](
         restore_sigterm()
         rundir.write_status({**status, "state": outcome, "ended": time.time()})
 
-    print("[trainctl] stopped with a checkpoint. Resume with:", file=sys.stderr)
+    print("[looptap] stopped with a checkpoint. Resume with:", file=sys.stderr)
     print(f"    {_resume_command(rundir)}", file=sys.stderr)
     raise SystemExit(0)
