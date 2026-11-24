@@ -1,5 +1,14 @@
 from .controller import Controller, NullController
-from .protocol import Plot, Rate, Value
+from .protocol import ETA, Plot, Rate, Value
 from .run import run
 
-__all__ = ["Controller", "NullController", "Param", "Plot", "Rate", "Value", "run"]
+__all__ = [
+    "ETA",
+    "Controller",
+    "NullController",
+    "Param",
+    "Plot",
+    "Rate",
+    "Value",
+    "run",
+]

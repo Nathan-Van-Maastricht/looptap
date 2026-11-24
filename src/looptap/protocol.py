@@ -49,6 +49,31 @@ class Rate:
 
 
 @dataclass
+class ETA:
+    KIND: ClassVar[str] = "eta"
+
+    metric: str
+    total: float | str
+    label: str | None = None
+    window: int = 10
+
+    def __post_init__(self) -> None:
+        if isinstance(self.total, bool) or not isinstance(
+            self.total, (int, float, str)
+        ):
+            raise TypeError(
+                f"ETA total must be a number or a metric name, got {self.total!r}"
+            )
+        if self.window < 1:
+            raise ValueError(f"ETA window must be at least 1, got {self.window!r}")
+
+    def sources(self) -> list[str]:
+        return (
+            [self.metric, self.total] if isinstance(self.total, str) else [self.metric]
+        )
+
+
+@dataclass
 class Plot:
     KIND: ClassVar[str] = "plot"
 
@@ -78,8 +103,8 @@ class UnknownView:
         return []
 
 
-View = Value | Rate | Plot | UnknownView
-_VIEW_TYPES: dict[str, type] = {cls.KIND: cls for cls in (Value, Rate, Plot)}
+View = Value | Rate | ETA | Plot | UnknownView
+_VIEW_TYPES: dict[str, type] = {cls.KIND: cls for cls in (Value, Rate, Plot, ETA)}
 
 
 @dataclass
