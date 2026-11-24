@@ -92,7 +92,7 @@ class RateWidget(ViewWidget):
         super().__init__()
         self.view = view
         self.border_title = view.label or f"{view.metric}/s"
-        self.recent: deque[tuple[float, float]] = deque(maxlen=max(2, view.window))
+        self.recent: deque[tuple[float, float]] = deque(maxlen=max(1, view.window) + 1)
 
     def compose(self) -> ComposeResult:
         yield Static("-")
