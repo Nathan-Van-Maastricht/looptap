@@ -192,7 +192,7 @@ class RunDir:
 
         return None
 
-    def read_reports(self, last: int) -> list[Report]:
+    def read_reports(self, last: int | None) -> list[Report]:
         if not self.metrics_path.is_file():
             return []
         reports: deque[Report] = deque(maxlen=last)

@@ -55,9 +55,18 @@ class Plot:
     x: str
     y: str
     title: str | None = None
+    window: int | None = None
 
     def sources(self) -> list[str]:
         return [self.x, self.y]
+
+    def __post_init__(self) -> None:
+        if self.window is not None and (
+            not isinstance(self.window, int) or self.window < 1
+        ):
+            raise ValueError(
+                f"Plot window must be a positive int or None, got {self.window!r}"
+            )
 
 
 @dataclass
