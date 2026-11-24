@@ -42,7 +42,7 @@ class Rate:
 
     metric: str
     label: str | None = None
-    window: int = 10
+    window: int = 1
 
     def sources(self) -> list[str]:
         return [self.metric]
