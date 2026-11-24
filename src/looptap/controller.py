@@ -192,6 +192,9 @@ class Controller:
             self._server.publish_state(self._state())
 
     def _apply_one(self, command: Command, triggered: list[str]) -> str | None:
+        if self._paused and command.op in ("set_param", "action"):
+            return f"Rejected {command.op}: the run is paused, resume it first"
+
         if command.op == "set_param":
             param = self._params.get(command.name or "")
             if param is None:
@@ -215,9 +218,8 @@ class Controller:
             if command.name not in self._actions:
                 return f"rejected action {command.name}: no such action"
             triggered.append(command.name)
-            when = "; it runs after resume" if self._paused else ""
             self._server.publish_notice(
-                Notice(level="info", text=f"triggered {command.name}{when}")
+                Notice(level="info", text=f"triggered {command.name}")
             )
             return None
         return f"rejected {command.op}: unknown command"
