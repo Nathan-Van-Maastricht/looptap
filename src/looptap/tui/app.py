@@ -19,7 +19,9 @@ from ..client import Client
 from ..protocol import (
     ETA,
     PROTOCOL_VERSION,
+    Bars,
     Command,
+    Histogram,
     History,
     Manifest,
     Message,
@@ -211,6 +213,56 @@ class PlotWidget(ViewWidget):
         plot.refresh()
 
 
+class BarsWidget(ViewWidget):
+    DEFAULT_CSS = """
+    BarsWidget PlotextPlot { height: 10; }
+    """
+
+    def __init__(self, view: Bars | Histogram):
+        super().__init__()
+        self.view = view
+        self.border_title = view.title or view.metric
+
+    def compose(self) -> ComposeResult:
+        yield PlotextPlot()
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        latest = None
+        for report in reversed(reports):
+            if self.view.metric in report.metrics:
+                latest = report.metrics[self.view.metric]
+                break
+
+        if latest is None:
+            return
+
+        if not isinstance(latest, list):
+            latest = [latest]
+
+        plot = self.query_one(PlotextPlot)
+        plot.plt.clear_data()
+        self.draw(plot.plt, latest)
+        plot.refresh()
+
+    def draw(self, plt: object, values: list[float]) -> None:
+        assert isinstance(self.view, Bars)
+
+        labels = self.view.labels
+
+        if labels is None or len(labels) != len(values):
+            labels = [str(i) for i in range(len(values))]
+
+        plt.bar(labels, [v if math.isfinite(v) else 0.0 for v in values])  # ty: ignore[missing-attribute]
+
+
+class HistogramWidget(BarsWidget):
+    def draw(self, plt: object, values: list[float]) -> None:
+        assert isinstance(self.view, Histogram)
+        finite = [v for v in values if math.isfinite(v)]
+        if finite:
+            plt.hist(finite, bins=self.view.bins)  # ty: ignore[missing-attribute]
+
+
 class UnknownViewWidget(ViewWidget):
     def __init__(self, view: UnknownView):
         super().__init__()
@@ -225,6 +277,8 @@ VIEW_WIDGETS: dict[type, type[ViewWidget]] = {
     Rate: RateWidget,
     ETA: ETAWidget,
     Plot: PlotWidget,
+    Bars: BarsWidget,
+    Histogram: HistogramWidget,
     UnknownView: UnknownViewWidget,
 }
 

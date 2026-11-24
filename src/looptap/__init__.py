@@ -4,7 +4,9 @@ from .run import run
 
 __all__ = [
     "ETA",
+    "Bars",
     "Controller",
+    "Histogram",
     "NullController",
     "Param",
     "Plot",

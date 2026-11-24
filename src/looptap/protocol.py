@@ -74,6 +74,34 @@ class ETA:
 
 
 @dataclass
+class Bars:
+    KIND: ClassVar[str] = "bars"
+
+    metric: str
+    labels: list[str] | None = None
+    title: str | None = None
+
+    def sources(self) -> list[str]:
+        return [self.metric]
+
+
+@dataclass
+class Histogram:
+    KIND: ClassVar[str] = "histogram"
+
+    metric: str
+    bins: int = 20
+    title: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.bins < 1:
+            raise ValueError(f"Histogram bins must be at least 1, got {self.bins}")
+
+    def sources(self) -> list[str]:
+        return [self.metric]
+
+
+@dataclass
 class Plot:
     KIND: ClassVar[str] = "plot"
 
@@ -103,8 +131,10 @@ class UnknownView:
         return []
 
 
-View = Value | Rate | ETA | Plot | UnknownView
-_VIEW_TYPES: dict[str, type] = {cls.KIND: cls for cls in (Value, Rate, Plot, ETA)}
+View = Value | Rate | ETA | Plot | Bars | Histogram | UnknownView
+_VIEW_TYPES: dict[str, type] = {
+    cls.KIND: cls for cls in (Value, Rate, Plot, ETA, Bars, Histogram)
+}
 
 
 @dataclass
