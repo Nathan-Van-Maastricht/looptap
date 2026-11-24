@@ -267,6 +267,10 @@ class ControlsPanel(VerticalScroll):
 
     def apply_state(self, state: State, pause_pending: bool = False) -> None:
         self.query_one("#stop", Button).display = state.resumable
+        for widget in self.query(
+            "ParamControl Input, ParamControl Switch, Button.action"
+        ):
+            widget.disabled = state.paused
 
         if self.manifest.pausable:
             toggle = self.query_one("#pause-toggle", Button)
