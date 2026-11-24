@@ -26,3 +26,17 @@ def format_age(seconds: float) -> str:
         if seconds >= size:
             return f"{seconds / size:.0f}{unit} ago"
     return f"{seconds:.0f}s ago"
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0, round(seconds))
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"

@@ -17,6 +17,7 @@ from textual_plotext import PlotextPlot
 
 from ..client import Client
 from ..protocol import (
+    ETA,
     PROTOCOL_VERSION,
     Command,
     History,
@@ -34,7 +35,7 @@ from ..protocol import (
 )
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
-from .formatting import format_value
+from .formatting import format_duration, format_value
 from .picker import PickerScreen
 
 STARTUP_TIMEOUT = 600.0
@@ -109,6 +110,52 @@ class RateWidget(ViewWidget):
             self.query_one(Static).update(f"{(v1 - v0) / (t1 - t0):,.2f}")
 
 
+class ETAWidget(ViewWidget):
+    COMPACT = True
+
+    def __init__(self, view: ETA):
+        super().__init__()
+        self.view = view
+        self.border_title = view.label or "ETA"
+        self.recent: deque[tuple[float, float]] = deque(maxlen=view.window + 1)
+        self.total: float | None = (
+            None if isinstance(view.total, str) else float(view.total)
+        )
+
+    def compose(self) -> ComposeResult:
+        yield Static("-")
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        for report in reports:
+            value = report.metrics.get(self.view.metric)
+            if isinstance(value, float) and math.isfinite(value):
+                self.recent.append((report.time, value))
+            if isinstance(self.view.total, str):
+                total = report.metrics.get(self.view.total)
+                if isinstance(total, float) and math.isfinite(total):
+                    self.total = total
+        if not self.recent or self.total is None:
+            return
+
+        text = self.query_one(Static)
+        (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
+        if v1 >= self.total:
+            text.update("done")
+            return
+        rate = (v1 - v0) / (t1 - t0) if t1 > t0 else 0.0
+        if rate <= 0:
+            text.update("-")  # not enough reports yet, or not progressing
+            return
+        remaining = (self.total - v1) / rate
+        finish = t1 + remaining
+        # Clock time it should finish; with the day too if that isn't today.
+        same_day = time.localtime(finish)[:3] == time.localtime()[:3]
+        clock = time.strftime(
+            "%H:%M" if same_day else "%a %H:%M", time.localtime(finish)
+        )
+        text.update(f"{format_duration(finish - time.time())}  (~{clock})")
+
+
 class PlotWidget(ViewWidget):
     DEFAULT_CSS = """
     PlotWidget PlotextPlot {height: 8; }
@@ -176,6 +223,7 @@ class UnknownViewWidget(ViewWidget):
 VIEW_WIDGETS: dict[type, type[ViewWidget]] = {
     Value: ValueWidget,
     Rate: RateWidget,
+    ETA: ETAWidget,
     Plot: PlotWidget,
     UnknownView: UnknownViewWidget,
 }
