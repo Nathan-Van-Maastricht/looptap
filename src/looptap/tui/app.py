@@ -37,7 +37,6 @@ from ..supervisor import log_tail, resume
 from .formatting import format_value
 from .picker import PickerScreen
 
-PLOT_POINTS = 500
 STARTUP_TIMEOUT = 600.0
 
 
@@ -119,8 +118,8 @@ class PlotWidget(ViewWidget):
         super().__init__()
         self.view = view
         self.border_title = view.title or view.y
-        self.xs: deque[float] = deque(maxlen=PLOT_POINTS)
-        self.ys: deque[float] = deque(maxlen=PLOT_POINTS)
+        self.xs: deque[float] = deque(maxlen=view.window)
+        self.ys: deque[float] = deque(maxlen=view.window)
 
     def compose(self) -> ComposeResult:
         yield Static("-", classes="value")
@@ -434,7 +433,7 @@ class RunScreen(Screen[None]):
         if isinstance(message, Manifest):
             await self.apply_manifest(message)
         elif isinstance(message, History):
-            self.apply_reports(message.reports)
+            self.apply_reports(self.full_history(message.reports))
         elif isinstance(message, Report):
             self.apply_reports([message])
         elif isinstance(message, State):
@@ -514,6 +513,19 @@ class RunScreen(Screen[None]):
         self.last_report_time = reports[-1].time
 
         self.refresh_status()
+
+    def full_history(self, recent: list[Report]) -> list[Report]:
+        whole_run = self.manifest is not None and any(
+            isinstance(view, Plot) and view.window is None
+            for view in self.manifest.views
+        )
+
+        if not whole_run or not recent:
+            return recent
+
+        cutoff = recent[-1].time
+
+        return [r for r in self.rundir.read_reports(None) if r.time <= cutoff]
 
     async def ensure_controls(self) -> None:
         if self.controls is None and self.manifest is not None:
