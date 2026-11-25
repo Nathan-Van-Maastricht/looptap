@@ -13,6 +13,22 @@ MetricValue = float | list[float]
 
 COMMAND_OPS = ("set_param", "pause", "resume", "action", "stop")
 
+COLOUR_NAMES = tuple(
+    name + bright
+    for name in (
+        "black",
+        "white",
+        "gray",
+        "red",
+        "green",
+        "orange",
+        "blue",
+        "magenta",
+        "cyan",
+    )
+    for bright in ("", "+")
+)
+
 PARAM_TYPES = ("int", "float", "bool", "str")
 _TRUE_STRINGS = ("true", "yes", "on", "1")
 _FALSE_STRINGS = ("false", "no", "off", "0")
@@ -81,6 +97,10 @@ class Bars:
     metric: str
     labels: list[str] | None = None
     title: str | None = None
+    colour: str | None = None
+
+    def __post_init__(self) -> None:
+        check_colour(self.colour)
 
     def sources(self) -> list[str]:
         return [self.metric]
@@ -95,8 +115,11 @@ class Histogram:
     title: str | None = None
     limits: list[float] | None = None
     density: bool = False
+    colour: str | None = None
 
     def __post_init__(self) -> None:
+        check_colour(self.colour)
+
         if isinstance(self.bins, list):
             edges = [float(e) for e in self.bins]
 
@@ -139,11 +162,14 @@ class Plot:
     y: str
     title: str | None = None
     window: int | None = None
+    colour: str | None = None
 
     def sources(self) -> list[str]:
         return [self.x, self.y]
 
     def __post_init__(self) -> None:
+        check_colour(self.colour)
+
         if self.window is not None and (
             not isinstance(self.window, int) or self.window < 1
         ):
@@ -297,6 +323,22 @@ class Notice:
 
 
 Message = Manifest | Report | History | State | Command | Notice
+
+
+def check_colour(colour: str | None) -> None:
+    if colour is None or colour in COLOUR_NAMES:
+        return
+
+    if isinstance(colour, str) and len(colour) == 7 and colour[0] == "#":
+        try:
+            int(colour[1:], 16)
+            return
+        except ValueError:
+            pass
+
+    raise ValueError(
+        f"Colour must be one of {','.join(COLOUR_NAMES)}, or '#rrggbb'; got {colour!r}"
+    )
 
 
 def _view_to_dict(view: View) -> dict[str, Any]:
