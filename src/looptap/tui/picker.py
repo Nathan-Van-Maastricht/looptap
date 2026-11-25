@@ -55,7 +55,7 @@ def _latest(info: RunInfo) -> str:
 
 
 class PickerScreen(Screen[None]):
-    BINDINGS = [("q", "app.quit", "Quit"), ("r", "refresh_runs", "Refresh")]  # noqa: RUF012
+    BINDINGS = [("escape", "app.quit", "Quit"), ("r", "refresh_runs", "Refresh")]  # noqa: RUF012
     DEFAULT_CSS = """
     #picker-status { height: 1; padding: 0 1; background: $boost; }
     #runs { height: 1fr; }
