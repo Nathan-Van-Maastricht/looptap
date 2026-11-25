@@ -80,11 +80,11 @@ Run the script as usual, then run `looptap` in another terminal on the same mach
 looptap isn't on PyPI yet:
 
 ```
-uv add "looptap[tui] @ git+https://github.com/<your-username>/looptap"
+uv add "looptap[tui] @ git+https://github.com/Nathan-Van-Maastricht/looptap"
 ```
 
 Machines that only run training can install plain `looptap`, without the TUI's dependencies. Requires Python 3.10 or later, on Linux or macOS.
 
 ## Status
 
-looptap is in early development, and its API and protocol may still change. The docstrings of `run()` and the view classes are the reference for now.
+looptap is in early development, and its API and protocol may still change.
