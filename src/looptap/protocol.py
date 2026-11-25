@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import socket
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
@@ -154,6 +155,21 @@ class Histogram:
         return [self.metric]
 
 
+def check_y_limits(low: float | None, high: float | None) -> None:
+    for limit in (low, high):
+        if limit is not None and (
+            isinstance(limit, bool)
+            or not isinstance(limit, (int, float))
+            or not math.isfinite(limit)
+        ):
+            raise ValueError(
+                f"y-axis limits must be finite numbers or None, got {limit!r}"
+            )
+
+        if low is not None and high is not None and low >= high:
+            raise ValueError(f"y_min must be below y_max, got {low!r} and {high!r}")
+
+
 @dataclass
 class Plot:
     KIND: ClassVar[str] = "plot"
@@ -163,6 +179,8 @@ class Plot:
     title: str | None = None
     window: int | None = None
     colour: str | list[str] | None = None
+    y_min: float | None = None
+    y_max: float | None = None
 
     def sources(self) -> list[str]:
         return [self.x, *self.ys]
@@ -195,6 +213,8 @@ class Plot:
             raise ValueError(
                 f"Plot window must be a positive int or None, got {self.window!r}"
             )
+
+        check_y_limits(self.y_min, self.y_max)
 
     @property
     def ys(self) -> list[str]:
