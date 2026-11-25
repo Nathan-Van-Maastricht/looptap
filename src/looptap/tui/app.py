@@ -698,7 +698,7 @@ class CompactGrid(Container):
 
 
 class InfoScreen(ModalScreen[None]):
-    BINDINGS = [("escape", "dismiss", "Close"), ("i", "dismiss", "Close")]  # noqa: RUF012
+    BINDINGS = [("i", "dismiss", "Close")]  # noqa: RUF012
     DEFAULT_CSS = """
     InfoScreen { align: center middle; }
     #info {
@@ -742,7 +742,7 @@ class InfoScreen(ModalScreen[None]):
             else:
                 yield Static("No config recorded for this run.")
 
-            yield Static("Escape or i to close", classes="hint")
+            yield Static("i to close", classes="hint")
 
     def on_mount(self) -> None:
         if self.manifest.config:
