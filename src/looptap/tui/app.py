@@ -206,7 +206,7 @@ class PlotWidget(ViewWidget):
         plt.xlabel(self.view.x)
         if finite:
             xs, ys = zip(*finite)
-            plt.plot(xs, ys, marker="braille")
+            plt.plot(xs, ys, marker="braille", color=plot_colour(self.view.colour))
 
             if all(x.is_integer() for x in xs):
                 ticks = int_ticks(int(min(xs)), int(max(xs)))
@@ -253,7 +253,17 @@ class BarsWidget(ViewWidget):
         if labels is None or len(labels) != len(values):
             labels = [str(i) for i in range(len(values))]
 
-        plt.bar(labels, [v if math.isfinite(v) else 0.0 for v in values])  # ty: ignore[missing-attribute]
+        plt.bar(  # ty: ignore[missing-attribute]
+            labels,
+            [v if math.isfinite(v) else 0.0 for v in values],
+            color=plot_colour(self.view.colour),
+        )
+
+
+def plot_colour(colour: str | None) -> str | tuple[int, int, int] | None:
+    if colour is not None and colour.startswith("#"):
+        return (int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16))
+    return colour
 
 
 def histogram_edges(view: Histogram, values: list[float]) -> list[float]:
@@ -310,7 +320,7 @@ class HistogramWidget(BarsWidget):
 
         xs.append(edges[-1])
         ys.append(0.0)
-        plt.plot(xs, ys, fillx=True)  # ty: ignore[missing-attribute]
+        plt.plot(xs, ys, fillx=True, color=plot_colour(self.view.colour))  # ty: ignore[missing-attribute]
         plt.xlim(edges[0], edges[-1])  # ty: ignore[missing-attribute]
         ticks = edge_ticks(edges, self.query_one(PlotextPlot).size.width or 80)
         plt.xticks(ticks, [f"{t:.3g}" for t in ticks])  # ty: ignore[missing-attribute]
