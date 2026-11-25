@@ -31,17 +31,27 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return args
 
 
-def _install_sigterm_handler() -> Callable[[], None]:
+def _install_signal_handlers() -> Callable[[], None]:
     if threading.current_thread() is not threading.main_thread():
         return lambda: None
-
-    previous = signal.getsignal(signal.SIGTERM)
 
     def handler(signum: int, frame: object) -> None:
         raise SystemExit(128 + signum)
 
-    signal.signal(signal.SIGTERM, handler)
-    return lambda: signal.signal(signal.SIGTERM, previous)  # type: ignore
+    previous = {}
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        current = signal.getsignal(signum)
+        if signum == signal.SIGHUP and current == signal.SIG_IGN:
+            continue
+
+        previous[signum] = current
+        signal.signal(signum, handler)
+
+    def restore() -> None:
+        for signum, original in previous.items():
+            signal.signal(signum, original)
+
+    return restore
 
 
 def _strip_looptap_args(argv: Sequence[str]) -> list[str]:
@@ -167,7 +177,7 @@ def run[T](
         history_size=history_size,
         initial_history=rundir.read_reports(history_size) if resume_from else (),
     )
-    restore_sigterm = _install_sigterm_handler()
+    restore_signals = _install_signal_handlers()
 
     status = {
         "state": "running",
@@ -198,13 +208,16 @@ def run[T](
             outcome = "interrupted"
             raise
         except SystemExit as e:
-            outcome = "terminated" if e.code == 128 + signal.SIGTERM else "exited"
+            outcome = {
+                128 + signal.SIGTERM: "terminated",
+                128 + signal.SIGHUP: "hung up",
+            }.get(e.code, "exited")
             raise
         finally:
             ctl.close()
     finally:
         server.stop()
-        restore_sigterm()
+        restore_signals()
         rundir.write_status({**status, "state": outcome, "ended": time.time()})
 
     print("[looptap] stopped with a checkpoint. Resume with:", file=sys.stderr)

@@ -22,6 +22,7 @@ STATE_LABELS = {
     "died": "✗ died",
     "interrupted": "■ interrupted",
     "terminated": "■ terminated",
+    "hung up": "■ hung up",
     "exited": "■ exited",
     "elsewhere": "? another host",
     "unknown": "? unknown",
