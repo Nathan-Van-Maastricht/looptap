@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import socket
 from collections.abc import Iterator
@@ -90,12 +91,41 @@ class Histogram:
     KIND: ClassVar[str] = "histogram"
 
     metric: str
-    bins: int = 20
+    bins: int | list[float] = 20
     title: str | None = None
+    limits: list[float] | None = None
+    density: bool = False
 
     def __post_init__(self) -> None:
-        if self.bins < 1:
-            raise ValueError(f"Histogram bins must be at least 1, got {self.bins}")
+        if isinstance(self.bins, list):
+            edges = [float(e) for e in self.bins]
+
+            if len(edges) < 2 or any(b <= a for a, b in itertools.pairwise(edges)):
+                raise ValueError(
+                    f"Histogram bin edges must be at least 2 increasing numbers, got {self.bins!r}"
+                )
+
+            if self.limits is not None:
+                raise ValueError(
+                    "Histogram limits only apply when bins is a number; the edges set the range"
+                )
+
+            self.bins = edges
+        elif (
+            not isinstance(self.bins, int)
+            or isinstance(self.bins, bool)
+            or self.bins < 1
+        ):
+            raise ValueError(
+                f"Histogram bins must be a positive int or a list of edges, got {self.bins!r}"
+            )
+
+        if self.limits is not None:
+            self.limits = [float(v) for v in self.limits]
+            if len(self.limits) != 2 or self.limits[1] <= self.limits[0]:
+                raise ValueError(
+                    f"Histogram limits must be [low, high] with low < high, got {self.limits!r}"
+                )
 
     def sources(self) -> list[str]:
         return [self.metric]

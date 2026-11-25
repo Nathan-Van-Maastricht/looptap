@@ -1,3 +1,4 @@
+import bisect
 import math
 import subprocess
 import time
@@ -255,12 +256,64 @@ class BarsWidget(ViewWidget):
         plt.bar(labels, [v if math.isfinite(v) else 0.0 for v in values])  # ty: ignore[missing-attribute]
 
 
+def histogram_edges(view: Histogram, values: list[float]) -> list[float]:
+    if isinstance(view.bins, list):
+        return view.bins
+
+    low, high = view.limits if view.limits else (min(values), max(values))
+    if high <= low:
+        low, high = low - 0.5, high + 0.5
+
+    return [low + (high - low) * i / view.bins for i in range(view.bins + 1)]
+
+
+def edge_ticks(edges: list[float], width: int) -> list[float]:
+    min_gap = (edges[-1] - edges[0]) * 6 / max(width, 12)
+
+    ticks = [edges[0]]
+    for edge in edges[1:-1]:
+        if edge - ticks[-1] >= min_gap and edges[-1] - edge >= min_gap:
+            ticks.append(edge)
+    ticks.append(edges[-1])
+
+    return ticks
+
+
 class HistogramWidget(BarsWidget):
     def draw(self, plt: object, values: list[float]) -> None:
         assert isinstance(self.view, Histogram)
+
         finite = [v for v in values if math.isfinite(v)]
-        if finite:
-            plt.hist(finite, bins=self.view.bins)  # ty: ignore[missing-attribute]
+        if not finite:
+            return
+
+        edges = histogram_edges(self.view, finite)
+        counts = [0] * (len(edges) - 1)
+
+        for v in finite:
+            i = bisect.bisect_right(edges, v) - 1
+            if v == edges[-1]:
+                i = len(counts) - 1
+            if 0 <= i < len(counts):
+                counts[i] += 1
+
+        heights: list[float] = [float(c) for c in counts]
+        if self.view.density:
+            heights = [
+                c / (len(finite) * (b - a)) for c, a, b in zip(counts, edges, edges[1:])
+            ]
+
+        xs, ys = [edges[0]], [0.0]
+        for height, a, b in zip(heights, edges, edges[1:]):
+            xs += [a, b]
+            ys += [height, height]
+
+        xs.append(edges[-1])
+        ys.append(0.0)
+        plt.plot(xs, ys, fillx=True)  # ty: ignore[missing-attribute]
+        plt.xlim(edges[0], edges[-1])  # ty: ignore[missing-attribute]
+        ticks = edge_ticks(edges, self.query_one(PlotextPlot).size.width or 80)
+        plt.xticks(ticks, [f"{t:.3g}" for t in ticks])  # ty: ignore[missing-attribute]
 
 
 class UnknownViewWidget(ViewWidget):
