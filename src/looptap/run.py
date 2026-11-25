@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import shlex
 import signal
@@ -6,9 +7,9 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from .controller import Controller, NullController, StopRun
 from .protocol import ETA, Bars, Histogram, Manifest, Param, Plot, Rate, Value, View
@@ -100,6 +101,7 @@ def run[T](
     params: Sequence[Param] = (),
     actions: Sequence[str] = (),
     pausable: bool = False,
+    config: Mapping[str, Any] | None = None,
     name: str | None = None,
     runs_root: str | os.PathLike[str] = DEFAULT_ROOT,
     history_size: int = 500,
@@ -107,6 +109,15 @@ def run[T](
 ) -> T:
     _validate_views(views, metrics)
     _validate_controls(params, actions)
+
+    config = dict(config or {})
+    try:
+        json.dumps(config, allow_nan=True)
+    except (TypeError, ValueError) as e:
+        raise TypeError(
+            f"config must be JSON-serialisable (numbers, strings, bools, lists, dicts): {e}"
+        ) from None
+
     args = _parse_args(argv)
 
     if args.headless:
@@ -143,6 +154,7 @@ def run[T](
         params=list(params),
         actions=list(actions),
         pausable=pausable,
+        config=config,
     )
     rundir.write_manifest(manifest)
 
