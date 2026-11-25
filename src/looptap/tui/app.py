@@ -167,50 +167,75 @@ class PlotWidget(ViewWidget):
     def __init__(self, view: Plot):
         super().__init__()
         self.view = view
-        self.border_title = view.title or view.y
-        self.xs: deque[float] = deque(maxlen=view.window)
-        self.ys: deque[float] = deque(maxlen=view.window)
+        self.title = view.title or ", ".join(view.ys)
+        self.border_title = self.title
+        self.series = [
+            (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in view.ys
+        ]
+        self.latest: list[float | None] = [None] * len(view.ys)
 
     def compose(self) -> ComposeResult:
-        yield Static("-", classes="value")
         yield PlotextPlot()
 
     def apply_reports(self, reports: list[Report]) -> None:
-        latest = None
+        changed = False
         for report in reports:
             x = report.metrics.get(self.view.x)
-            y = report.metrics.get(self.view.y)
+            for i, name in enumerate(self.view.ys):
+                y = report.metrics.get(name)
+                if isinstance(y, float):
+                    self.latest[i] = y
+                    changed = True
 
-            if y is not None:
-                latest = y
+                if isinstance(x, float) and isinstance(y, float):
+                    self.series[i][0].append(x)
+                    self.series[i][1].append(y)
 
-            if isinstance(x, float) and isinstance(y, float):
-                self.xs.append(x)
-                self.ys.append(y)
-
-        if latest is None:
+        if not changed:
             return
 
-        self.query_one(".value", Static).update(format_value(latest))
+        self.border_title = self.describe()
         self.redraw()
 
-    def redraw(self) -> None:
-        finite = [
-            (x, y)
-            for x, y in zip(self.xs, self.ys)
-            if math.isfinite(x) and math.isfinite(y)
+    def describe(self) -> str:
+        values = [
+            f"{self.view.ys[0]}: {format_value(value)}"
+            if len(self.view.ys) == 1
+            else f"{name}: {format_value(value)}"
+            for name, value in zip(self.view.ys, self.latest)
+            if value is not None
         ]
+        return f"{' | '.join(values)}" if values else self.title
+
+    def redraw(self) -> None:
         plot = self.query_one(PlotextPlot)
         plt = plot.plt
         plt.clear_data()
         plt.xlabel(self.view.x)
-        if finite:
-            xs, ys = zip(*finite)
-            plt.plot(xs, ys, marker="braille", color=plot_colour(self.view.colour))
+        all_xs: list[float] = []
+        multiple = len(self.view.ys) > 1
+        for (xs, ys), name, colour in zip(self.series, self.view.ys, self.view.colours):
+            finite = [
+                (x, y) for x, y in zip(xs, ys) if math.isfinite(x) and math.isfinite(y)
+            ]
 
-            if all(x.is_integer() for x in xs):
-                ticks = int_ticks(int(min(xs)), int(max(xs)))
-                plt.xticks(ticks, [f"{t:,}" for t in ticks])
+            if finite:
+                px, py = zip(*finite)
+
+                plt.plot(
+                    px,
+                    py,
+                    marker="braille",
+                    color=plot_colour(colour),
+                    label=name if multiple else None,
+                )
+
+                all_xs.extend(px)
+
+        if all_xs and all(x.is_integer() for x in all_xs):
+            ticks = int_ticks(int(min(all_xs)), int(max(all_xs)))
+            plt.xticks(ticks, [f"{t:,}" for t in ticks])
+
         plot.refresh()
 
 

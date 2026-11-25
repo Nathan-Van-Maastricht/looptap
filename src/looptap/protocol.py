@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, BinaryIO, ClassVar
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 MetricValue = float | list[float]
 
@@ -159,16 +159,35 @@ class Plot:
     KIND: ClassVar[str] = "plot"
 
     x: str
-    y: str
+    y: str | list[str]
     title: str | None = None
     window: int | None = None
-    colour: str | None = None
+    colour: str | list[str] | None = None
 
     def sources(self) -> list[str]:
-        return [self.x, self.y]
+        return [self.x, *self.ys]
 
     def __post_init__(self) -> None:
-        check_colour(self.colour)
+        if isinstance(self.y, list) and (
+            not self.y or not all(isinstance(name, str) and name for name in self.y)
+        ):
+            raise ValueError(
+                f"Plot y must be a metric name or a non-empty list of them, got {self.y!r}"
+            )
+
+        if isinstance(self.colour, list):
+            if len(self.colour) != len(self.ys):
+                raise ValueError(
+                    f"Plot has {len(self.ys)} y series but {len(self.colour)} colours"
+                )
+            for colour in self.colour:
+                check_colour(colour)
+        elif self.colour is not None and len(self.ys) > 1:
+            raise ValueError(
+                "With several y series, give colour as a list, one colour per series"
+            )
+        else:
+            check_colour(self.colour)
 
         if self.window is not None and (
             not isinstance(self.window, int) or self.window < 1
@@ -176,6 +195,18 @@ class Plot:
             raise ValueError(
                 f"Plot window must be a positive int or None, got {self.window!r}"
             )
+
+    @property
+    def ys(self) -> list[str]:
+        return self.y if isinstance(self.y, list) else [self.y]
+
+    @property
+    def colours(self) -> list[str | None]:
+        return (
+            self.colour
+            if isinstance(self.colour, list)
+            else [self.colour] * len(self.ys)  # ty: ignore[invalid-explicit-return]
+        )
 
 
 @dataclass
