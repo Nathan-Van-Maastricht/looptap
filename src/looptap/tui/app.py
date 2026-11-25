@@ -45,6 +45,7 @@ from ..protocol import (
     UnknownView,
     Value,
     View,
+    check_y_limits,
 )
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
@@ -53,6 +54,7 @@ from .picker import PickerScreen
 
 STARTUP_TIMEOUT = 600.0
 SHOW_CONTROLS = False
+Y_FALLBACK_MARGIN = 0.01
 
 
 def int_ticks(first: int, last: int, count: int = 5) -> list[float]:
@@ -175,6 +177,8 @@ class PlotWidget(ViewWidget):
     PlotWidget PlotextPlot {height: 8; }
     """
 
+    can_focus = True
+
     def __init__(self, view: Plot):
         super().__init__()
         self.view = view
@@ -184,9 +188,29 @@ class PlotWidget(ViewWidget):
             (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in view.ys
         ]
         self.latest: list[float | None] = [None] * len(view.ys)
+        self.y_override: tuple[float | None, float | None] | None = None
 
     def compose(self) -> ComposeResult:
         yield PlotextPlot()
+
+    @property
+    def y_limits(self) -> tuple[float | None, float | None]:
+        return (
+            self.y_override
+            if self.y_override is not None
+            else (self.view.y_min, self.view.y_max)
+        )
+
+    def action_set_y_limits(self) -> None:
+        def apply(result: tuple[float | None, float | None] | str | None) -> None:
+            if result is None:
+                return
+
+            self.y_override = None if result == "reset" else result  # ty: ignore[invalid-assignment]
+            self.redraw()
+
+        declared = (self.view.y_min, self.view.y_max)
+        self.app.push_screen(YLimitsScreen(self.title, self.y_limits, declared), apply)
 
     def apply_reports(self, reports: list[Report]) -> None:
         changed = False
@@ -218,17 +242,45 @@ class PlotWidget(ViewWidget):
         ]
         return f"{' | '.join(values)}" if values else self.title
 
+    def fit_y_limits(self, ys: list[float]) -> tuple[float | None, float | None]:
+        low, high = self.y_limits
+        if not ys or (low is None and high is None):
+            return low, high
+
+        def distance(y: float) -> float:
+            if low is not None and y < low:
+                return low - y
+
+            if high is not None and y > high:
+                return y - high
+
+            return 0.0
+
+        nearest = min(ys, key=distance)
+        if distance(nearest) == 0.0:
+            return low, high
+
+        return nearest - Y_FALLBACK_MARGIN, nearest + Y_FALLBACK_MARGIN
+
     def redraw(self) -> None:
         plot = self.query_one(PlotextPlot)
         plt = plot.plt
         plt.clear_data()
         plt.xlabel(self.view.x)
+        points = [
+            [(x, y) for x, y in zip(xs, ys) if math.isfinite(x) and math.isfinite(y)]
+            for xs, ys in self.series
+        ]
+        low, high = self.fit_y_limits([y for series in points for _, y in series])
+        plt.ylim(low, high)
         all_xs: list[float] = []
         multiple = len(self.view.ys) > 1
-        for (xs, ys), name, colour in zip(self.series, self.view.ys, self.view.colours):
-            finite = [
-                (x, y) for x, y in zip(xs, ys) if math.isfinite(x) and math.isfinite(y)
-            ]
+        for finite, name, colour in zip(points, self.view.ys, self.view.colours):
+            if finite and (
+                (high is not None and all(y > high for _, y in finite))
+                or (low is not None and all(y < low for _, y in finite))
+            ):
+                continue
 
             if finite:
                 px, py = zip(*finite)
@@ -513,6 +565,87 @@ class ControlsPanel(VerticalScroll):
         self.query_one("#stop", Button).label = "Stop"
 
 
+class YLimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
+    BINDINGS = [("escape", "dismiss", "Cancel")]  # noqa: RUF012
+    DEFAULT_CSS = """
+    YLimitsScreen { align: center middle; }
+    #y-limits {
+        width: 50;
+        height: auto;
+        border: round $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #y-limits .heading { text-style: bold; margin-bottom: 1; }
+    #y-limits .hint { color: $text-muted; margin-bottom: 1; }
+    #y-limits Horizontal { height: auto; margin-top: 1; }
+    #y-limits Button { width: 1fr; margin-right: 1; }
+    """
+
+    def __init__(
+        self,
+        title: str,
+        current: tuple[float | None, float | None],
+        declared: tuple[float | None, float | None],
+    ):
+        super().__init__()
+        self.plot_title = title
+        self.current = current
+        self.declared = declared
+
+    def compose(self) -> ComposeResult:
+        def text(limit: float | None) -> str:
+            return "" if limit is None else f"{limit:g}"
+
+        with Vertical(id="y-limits"):
+            yield Label(f"Y range: {self.plot_title}", classes="heading")
+            yield Static("Leave either blank to fit the data", classes="hint")
+            yield Input(
+                text(self.current[0]),
+                placeholder="min",
+                type="number",
+                valid_empty=True,
+                id="y-min",
+            )
+            yield Input(
+                text(self.current[1]),
+                placeholder="max",
+                type="number",
+                valid_empty=True,
+                id="y-max",
+            )
+
+            yield Button("Apply", id="y-apply", variant="primary")
+            with Horizontal():
+                yield Button("Reset", id="y-reset")
+                yield Button("Cancel", id="y-cancel")
+
+    @on(Button.Pressed, "#y-apply")
+    @on(Input.Submitted)
+    def apply(self) -> None:
+        try:
+            low, high = (
+                float(value)
+                if (value := self.query_one(f"#{name}", Input).value.strip())
+                else None
+                for name in ("y-min", "y-max")
+            )
+            check_y_limits(low, high)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+
+        self.dismiss((low, high))
+
+    @on(Button.Pressed, "#y-reset")
+    def reset(self) -> None:
+        self.dismiss("reset")
+
+    @on(Button.Pressed, "#y-cancel")
+    def cancel(self) -> None:
+        self.dismiss(None)
+
+
 class CompactGrid(Container):
     DEFAULT_CSS = """
     CompactGrid { layout: grid; height: auto; grid-rows: 3; grid-gutter: 1 1; padding: 1 1 1 1; }
@@ -594,6 +727,7 @@ class RunScreen(Screen[None]):
         Binding("p", "toggle_pause", "Pause/Resume"),
         ("c", "toggle_controls", "Controls"),
         ("i", "show_info", "Info"),
+        ("y", "set_y_limits", "Y range"),
     ]
     CSS = """
     #status { height: 1; padding: 0 1; background: $boost; }
@@ -885,7 +1019,20 @@ class RunScreen(Screen[None]):
         if action == "show_info":
             return self.manifest is not None
 
+        if action == "set_y_limits":
+            return isinstance(self.focused, PlotWidget)
+
         return True
+
+    def action_set_y_limits(self) -> None:
+        if isinstance(self.focused, PlotWidget):
+            self.focused.action_set_y_limits()
+
+    def on_descendant_focus(self) -> None:
+        self.refresh_bindings()
+
+    def on_descendant_blur(self) -> None:
+        self.refresh_bindings()
 
     def action_toggle_controls(self) -> None:
         self.show_controls = not self.show_controls
