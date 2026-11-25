@@ -308,6 +308,7 @@ class Manifest:
     params: list[Param] = field(default_factory=list)
     actions: list[str] = field(default_factory=list)
     pausable: bool = False
+    config: dict[str, Any] = field(default_factory=dict)
 
     protocol_version: int = PROTOCOL_VERSION
 

@@ -29,6 +29,7 @@ from ..protocol import (
     Notice,
     Param,
     Plot,
+    ProtocolError,
     Rate,
     Report,
     State,
@@ -420,6 +421,18 @@ class ParamControl(Vertical):
                 text_input.value = str(value)
 
 
+def flatten_config(config: dict[str, Any], prefix: str = "") -> list[tuple[str, Any]]:
+    items: list[tuple[str, Any]] = []
+    for key, value in config.items():
+        name = f"{prefix}{key}"
+        if isinstance(value, dict) and value:
+            items.extend(flatten_config(value, f"{name}."))
+        else:
+            items.append((name, value))
+
+    return items
+
+
 class ControlsPanel(VerticalScroll):
     DEFAULT_CSS = """
     ControlsPanel {
@@ -433,13 +446,26 @@ class ControlsPanel(VerticalScroll):
     ControlsPanel Input { margin-top: 1; }
     """
 
-    def __init__(self, manifest: Manifest):
+    def __init__(self, manifest: Manifest, interactive: bool = True):
         super().__init__()
         self.manifest = manifest
+        self.interactive = interactive
         self.param_controls = {p.name: ParamControl(p) for p in manifest.params}
         self.stop_armed = False
 
     def compose(self) -> ComposeResult:
+        if self.interactive:
+            yield from self.compose_controls()
+
+        if self.manifest.config:
+            yield Label("Config", classes="heading")
+            lines = [
+                f"{name}: {value}"
+                for name, value in flatten_config(self.manifest.config)
+            ]
+            yield Static("\n".join(lines), markup=False)
+
+    def compose_controls(self) -> ComposeResult:
         stop = Button("Stop", id="stop", variant="error")
         stop.display = False
         yield stop
@@ -635,7 +661,7 @@ class RunScreen(Screen[None]):
             )
 
     @on(Closed)
-    def handle_closed(self, event: Closed) -> None:
+    async def handle_closed(self, event: Closed) -> None:
         self.connected = False
         self.starting = False
         self.notice = event.reason
@@ -657,6 +683,10 @@ class RunScreen(Screen[None]):
             )
 
         self.update_resume_bar()
+
+        if self.manifest is None:
+            await self.load_saved_run()
+
         self.refresh_bindings()
         self.refresh_status()
 
@@ -673,6 +703,15 @@ class RunScreen(Screen[None]):
         if manifest.protocol_version != PROTOCOL_VERSION:
             self.notice = f"Protocol v{manifest.protocol_version}, TUI expects v{PROTOCOL_VERSION}"
 
+        await self.build_views(manifest)
+
+        if manifest.params or manifest.actions or manifest.pausable or manifest.config:
+            await self.ensure_controls()
+
+        self.refresh_bindings()
+        self.refresh_status()
+
+    async def build_views(self, manifest: Manifest) -> None:
         compact = self.query_one("#compact", Horizontal)
         plots = self.query_one("#plots", VerticalScroll)
         await compact.remove_children()
@@ -688,11 +727,21 @@ class RunScreen(Screen[None]):
         if self.controls is not None:
             await self.controls.remove()
             self.controls = None
-        if manifest.params or manifest.actions or manifest.pausable:
-            await self.ensure_controls()
 
-        self.refresh_bindings()
-        self.refresh_status()
+    async def load_saved_run(self) -> None:
+        try:
+            manifest = self.rundir.read_manifest()
+        except (OSError, ValueError, ProtocolError) as e:
+            self.notice += f"; couldn't read it's manifest: {e}"
+            return
+
+        self.sub_title = manifest.run_name
+        await self.build_views(manifest)
+
+        if manifest.config:
+            await self.ensure_controls(interactive=False)
+        self.apply_reports(self.rundir.read_reports(None))
+        self.notice += "; showing its saved metrics"
 
     def apply_reports(self, reports: list[Report]) -> None:
         if not reports:
@@ -717,9 +766,9 @@ class RunScreen(Screen[None]):
 
         return [r for r in self.rundir.read_reports(None) if r.time <= cutoff]
 
-    async def ensure_controls(self) -> None:
+    async def ensure_controls(self, interactive: bool = True) -> None:
         if self.controls is None and self.manifest is not None:
-            self.controls = ControlsPanel(self.manifest)
+            self.controls = ControlsPanel(self.manifest, interactive)
             await self.query_one("#body", Horizontal).mount(self.controls)
 
     async def apply_state(self, state: State) -> None:
