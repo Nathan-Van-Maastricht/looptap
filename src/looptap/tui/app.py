@@ -45,7 +45,7 @@ from ..protocol import (
     UnknownView,
     Value,
     View,
-    check_y_limits,
+    check_limits,
 )
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
@@ -188,10 +188,19 @@ class PlotWidget(ViewWidget):
             (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in view.ys
         ]
         self.latest: list[float | None] = [None] * len(view.ys)
+        self.x_override: tuple[float | None, float | None] | None = None
         self.y_override: tuple[float | None, float | None] | None = None
 
     def compose(self) -> ComposeResult:
         yield PlotextPlot()
+
+    @property
+    def x_limits(self) -> tuple[float | None, float | None]:
+        return (
+            self.x_override
+            if self.x_override is not None
+            else (self.view.x_min, self.view.x_max)
+        )
 
     @property
     def y_limits(self) -> tuple[float | None, float | None]:
@@ -201,16 +210,24 @@ class PlotWidget(ViewWidget):
             else (self.view.y_min, self.view.y_max)
         )
 
-    def action_set_y_limits(self) -> None:
+    def action_set_limits(self, axis: str) -> None:
         def apply(result: tuple[float | None, float | None] | str | None) -> None:
             if result is None:
                 return
 
-            self.y_override = None if result == "reset" else result  # ty: ignore[invalid-assignment]
+            override = None if result == "reset" else result
+            if axis == "x":
+                self.x_override = override  # ty: ignore[invalid-assignment]
+            else:
+                self.y_override = override  # ty: ignore[invalid-assignment]
             self.redraw()
 
-        declared = (self.view.y_min, self.view.y_max)
-        self.app.push_screen(YLimitsScreen(self.title, self.y_limits, declared), apply)
+        if axis == "x":
+            current, declared = self.x_limits, (self.view.x_min, self.view.x_max)
+        else:
+            current, declared = self.y_limits, (self.view.y_min, self.view.y_max)
+
+        self.app.push_screen(LimitsScreen(axis, self.title, current, declared), apply)
 
     def apply_reports(self, reports: list[Report]) -> None:
         changed = False
@@ -267,10 +284,19 @@ class PlotWidget(ViewWidget):
         plt = plot.plt
         plt.clear_data()
         plt.xlabel(self.view.x)
+        x_low, x_high = self.x_limits
         points = [
-            [(x, y) for x, y in zip(xs, ys) if math.isfinite(x) and math.isfinite(y)]
+            [
+                (x, y)
+                for x, y in zip(xs, ys)
+                if math.isfinite(x)
+                and math.isfinite(y)
+                and (x_low is None or x >= x_low)
+                and (x_high is None or x <= x_high)
+            ]
             for xs, ys in self.series
         ]
+        plt.xlim(x_low, x_high)
         low, high = self.fit_y_limits([y for series in points for _, y in series])
         plt.ylim(low, high)
         all_xs: list[float] = []
@@ -296,7 +322,9 @@ class PlotWidget(ViewWidget):
                 all_xs.extend(px)
 
         if all_xs and all(x.is_integer() for x in all_xs):
-            ticks = int_ticks(int(min(all_xs)), int(max(all_xs)))
+            first = x_low if x_low is not None else min(all_xs)
+            last = x_high if x_high is not None else max(all_xs)
+            ticks = int_ticks(math.ceil(first), math.floor(last))
             plt.xticks(ticks, [f"{t:,}" for t in ticks])
 
         plot.refresh()
@@ -565,30 +593,32 @@ class ControlsPanel(VerticalScroll):
         self.query_one("#stop", Button).label = "Stop"
 
 
-class YLimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
+class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
     BINDINGS = [("escape", "dismiss", "Cancel")]  # noqa: RUF012
     DEFAULT_CSS = """
-    YLimitsScreen { align: center middle; }
-    #y-limits {
+    LimitsScreen { align: center middle; }
+    #limits {
         width: 50;
         height: auto;
         border: round $primary;
         background: $surface;
         padding: 1 2;
     }
-    #y-limits .heading { text-style: bold; margin-bottom: 1; }
-    #y-limits .hint { color: $text-muted; margin-bottom: 1; }
-    #y-limits Horizontal { height: auto; margin-top: 1; }
-    #y-limits Button { width: 1fr; margin-right: 1; }
+    #limits .heading { text-style: bold; margin-bottom: 1; }
+    #limits .hint { color: $text-muted; margin-bottom: 1; }
+    #limits Horizontal { height: auto; margin-top: 1; }
+    #limits Button { width: 1fr; margin-right: 1; }
     """
 
     def __init__(
         self,
+        axis: str,
         title: str,
         current: tuple[float | None, float | None],
         declared: tuple[float | None, float | None],
     ):
         super().__init__()
+        self.axis = axis
         self.plot_title = title
         self.current = current
         self.declared = declared
@@ -597,30 +627,32 @@ class YLimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None])
         def text(limit: float | None) -> str:
             return "" if limit is None else f"{limit:g}"
 
-        with Vertical(id="y-limits"):
-            yield Label(f"Y range: {self.plot_title}", classes="heading")
+        with Vertical(id="limits"):
+            yield Label(
+                f"{self.axis.upper()} range: {self.plot_title}", classes="heading"
+            )
             yield Static("Leave either blank to fit the data", classes="hint")
             yield Input(
                 text(self.current[0]),
                 placeholder="min",
                 type="number",
                 valid_empty=True,
-                id="y-min",
+                id="limit-min",
             )
             yield Input(
                 text(self.current[1]),
                 placeholder="max",
                 type="number",
                 valid_empty=True,
-                id="y-max",
+                id="limit-max",
             )
 
             yield Button("Apply", id="y-apply", variant="primary")
             with Horizontal():
-                yield Button("Reset", id="y-reset")
-                yield Button("Cancel", id="y-cancel")
+                yield Button("Reset", id="limit-reset")
+                yield Button("Cancel", id="limit-cancel")
 
-    @on(Button.Pressed, "#y-apply")
+    @on(Button.Pressed, "#limit-apply")
     @on(Input.Submitted)
     def apply(self) -> None:
         try:
@@ -628,16 +660,16 @@ class YLimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None])
                 float(value)
                 if (value := self.query_one(f"#{name}", Input).value.strip())
                 else None
-                for name in ("y-min", "y-max")
+                for name in ("limit-min", "limit-max")
             )
-            check_y_limits(low, high)
+            check_limits(low, high, self.axis)
         except ValueError as e:
             self.notify(str(e), severity="error")
             return
 
         self.dismiss((low, high))
 
-    @on(Button.Pressed, "#y-reset")
+    @on(Button.Pressed, "#limit-reset")
     def reset(self) -> None:
         self.dismiss("reset")
 
@@ -722,11 +754,12 @@ class InfoScreen(ModalScreen[None]):
 
 class RunScreen(Screen[None]):
     BINDINGS = [  # noqa: RUF012
-        ("escape", "back", "Runs"),
-        ("q", "app.quit", "Quit"),
+        ("escape", "app.quit", "Quit"),
+        ("r", "back", "Runs"),
         Binding("p", "toggle_pause", "Pause/Resume"),
         ("c", "toggle_controls", "Controls"),
         ("i", "show_info", "Info"),
+        ("x", "set_x_limits", "X range"),
         ("y", "set_y_limits", "Y range"),
     ]
     CSS = """
@@ -1019,14 +1052,18 @@ class RunScreen(Screen[None]):
         if action == "show_info":
             return self.manifest is not None
 
-        if action == "set_y_limits":
+        if action in ("set_x_limits", "set_y_limits"):
             return isinstance(self.focused, PlotWidget)
 
         return True
 
+    def action_set_x_limits(self) -> None:
+        if isinstance(self.focused, PlotWidget):
+            self.focused.action_set_limits("x")
+
     def action_set_y_limits(self) -> None:
         if isinstance(self.focused, PlotWidget):
-            self.focused.action_set_y_limits()
+            self.focused.action_set_limits("y")
 
     def on_descendant_focus(self) -> None:
         self.refresh_bindings()
