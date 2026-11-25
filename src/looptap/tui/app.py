@@ -9,10 +9,19 @@ from typing import Any
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
-from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Static,
+    Switch,
+)
 from textual.worker import get_current_worker
 from textual_plotext import PlotextPlot
 
@@ -43,6 +52,7 @@ from .formatting import format_duration, format_value
 from .picker import PickerScreen
 
 STARTUP_TIMEOUT = 600.0
+SHOW_CONTROLS = False
 
 
 def int_ticks(first: int, last: int, count: int = 5) -> list[float]:
@@ -446,26 +456,13 @@ class ControlsPanel(VerticalScroll):
     ControlsPanel Input { margin-top: 1; }
     """
 
-    def __init__(self, manifest: Manifest, interactive: bool = True):
+    def __init__(self, manifest: Manifest):
         super().__init__()
         self.manifest = manifest
-        self.interactive = interactive
         self.param_controls = {p.name: ParamControl(p) for p in manifest.params}
         self.stop_armed = False
 
     def compose(self) -> ComposeResult:
-        if self.interactive:
-            yield from self.compose_controls()
-
-        if self.manifest.config:
-            yield Label("Config", classes="heading")
-            lines = [
-                f"{name}: {value}"
-                for name, value in flatten_config(self.manifest.config)
-            ]
-            yield Static("\n".join(lines), markup=False)
-
-    def compose_controls(self) -> ComposeResult:
         stop = Button("Stop", id="stop", variant="error")
         stop.display = False
         yield stop
@@ -516,16 +513,90 @@ class ControlsPanel(VerticalScroll):
         self.query_one("#stop", Button).label = "Stop"
 
 
+class CompactGrid(Container):
+    DEFAULT_CSS = """
+    CompactGrid { layout: grid; height: auto; grid-rows: 3; grid-gutter: 1 1; padding: 1 1 1 1; }
+    CompactGrid ViewWidget { height: 3; margin: 0; }
+    """
+
+    MIN_CELL_WIDTH = 24
+    MAX_CELLS_PER_ROW = 4
+
+    def on_resize(self) -> None:
+        self.update_columns()
+
+    def update_columns(self) -> None:
+        count = len(self.children)
+        if count:
+            fit = max(1, self.size.width // self.MIN_CELL_WIDTH)
+            self.styles.grid_size_columns = min(count, fit, self.MAX_CELLS_PER_ROW)
+
+
+class InfoScreen(ModalScreen[None]):
+    BINDINGS = [("escape", "dismiss", "Close"), ("i", "dismiss", "Close")]  # noqa: RUF012
+    DEFAULT_CSS = """
+    InfoScreen { align: center middle; }
+    #info {
+        width: 80%;
+        max-width: 100;
+        height: auto;
+        max-height: 80%;
+        border: round $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #info .heading { text-style: bold; margin: 1 0 0 0; }
+    #info DataTable { height: auto; max-height: 30; }
+    #info .hint { color: $text-muted; margin-top: 1; }
+    """
+
+    def __init__(self, rundir: RunDir, manifest: Manifest):
+        super().__init__()
+        self.rundir = rundir
+        self.manifest = manifest
+
+    def compose(self) -> ComposeResult:
+        status = self.rundir.read_status() or {}
+        details = [f"Directory: {self.rundir.path}"]
+
+        if "started" in status:
+            details.append(
+                f"Started: {time.strftime('%Y-%m-%d %H:%M', time.localtime(status['started']))}"
+            )
+
+        if "host" in status:
+            details.append(f"Host:    {status['host']}")
+
+        with VerticalScroll(id="info"):
+            yield Label(self.manifest.run_name, classes="heading")
+            yield Static("\n".join(details), markup=False)
+            yield Label("Config", classes="heading")
+
+            if self.manifest.config:
+                yield DataTable(show_cursor=False, id="config")
+            else:
+                yield Static("No config recorded for this run.")
+
+            yield Static("Escape or i to close", classes="hint")
+
+    def on_mount(self) -> None:
+        if self.manifest.config:
+            table = self.query_one("#config", DataTable)
+            table.add_columns("Setting", "Value")
+            for name, value in flatten_config(self.manifest.config):
+                table.add_row(name, str(value))
+
+
 class RunScreen(Screen[None]):
     BINDINGS = [  # noqa: RUF012
         ("escape", "back", "Runs"),
         ("q", "app.quit", "Quit"),
         Binding("p", "toggle_pause", "Pause/Resume"),
+        ("c", "toggle_controls", "Controls"),
+        ("i", "show_info", "Info"),
     ]
     CSS = """
     #status { height: 1; padding: 0 1; background: $boost; }
-    #compact { height: auto; padding: 1 1 0 1; }
-    #compact ViewWidget { width: 1fr; margin-right: 1; }
     #plots { padding: 1 1 0 1; }
     #body { height: 1fr; }
     #main { width: 1fr; }
@@ -556,6 +627,7 @@ class RunScreen(Screen[None]):
         self.paused = False
         self.pause_target: bool | None = None
         self.controls: ControlsPanel | None = None
+        self.show_controls: bool = SHOW_CONTROLS
         self.process: subprocess.Popen[bytes] | None = None
         self.starting = False
         self.exiting = False
@@ -569,7 +641,7 @@ class RunScreen(Screen[None]):
             yield Button("Resume", id="resume", variant="success")
 
         with Horizontal(id="body"), Vertical(id="main"):
-            yield Horizontal(id="compact")
+            yield CompactGrid(id="compact")
             yield VerticalScroll(id="plots")
         yield Footer()
 
@@ -705,14 +777,14 @@ class RunScreen(Screen[None]):
 
         await self.build_views(manifest)
 
-        if manifest.params or manifest.actions or manifest.pausable or manifest.config:
+        if manifest.params or manifest.actions or manifest.pausable:
             await self.ensure_controls()
 
         self.refresh_bindings()
         self.refresh_status()
 
     async def build_views(self, manifest: Manifest) -> None:
-        compact = self.query_one("#compact", Horizontal)
+        compact = self.query_one("#compact", CompactGrid)
         plots = self.query_one("#plots", VerticalScroll)
         await compact.remove_children()
         await plots.remove_children()
@@ -722,6 +794,7 @@ class RunScreen(Screen[None]):
         await compact.mount(*compact_widgets)
         await plots.mount(*(w for w in self.view_widgets if not w.COMPACT))
         compact.display = bool(compact_widgets)
+        compact.update_columns()
 
         self.manifest = manifest
         if self.controls is not None:
@@ -738,8 +811,6 @@ class RunScreen(Screen[None]):
         self.sub_title = manifest.run_name
         await self.build_views(manifest)
 
-        if manifest.config:
-            await self.ensure_controls(interactive=False)
         self.apply_reports(self.rundir.read_reports(None))
         self.notice += "; showing its saved metrics"
 
@@ -766,10 +837,12 @@ class RunScreen(Screen[None]):
 
         return [r for r in self.rundir.read_reports(None) if r.time <= cutoff]
 
-    async def ensure_controls(self, interactive: bool = True) -> None:
+    async def ensure_controls(self) -> None:
         if self.controls is None and self.manifest is not None:
-            self.controls = ControlsPanel(self.manifest, interactive)
+            self.controls = ControlsPanel(self.manifest)
+            self.controls.display = self.show_controls
             await self.query_one("#body", Horizontal).mount(self.controls)
+            self.refresh_bindings()
 
     async def apply_state(self, state: State) -> None:
         self.paused = state.paused
@@ -806,7 +879,23 @@ class RunScreen(Screen[None]):
                 return False
             return True if self.connected else None
 
+        if action == "toggle_controls":
+            return self.controls is not None
+
+        if action == "show_info":
+            return self.manifest is not None
+
         return True
+
+    def action_toggle_controls(self) -> None:
+        self.show_controls = not self.show_controls
+
+        if self.controls is not None:
+            self.controls.display = self.show_controls
+
+    def action_show_info(self) -> None:
+        if self.manifest is not None:
+            self.app.push_screen(InfoScreen(self.rundir, self.manifest))
 
     def action_toggle_pause(self) -> None:
         if self.pause_target is not None:
