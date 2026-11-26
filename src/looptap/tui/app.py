@@ -1197,7 +1197,7 @@ class RunScreen(Screen[None]):
 class LooptapApp(App[None]):
     TITLE = "looptap"
 
-    def __init__(self, root: str | Path, open_run: RunDir | None = None):
+    def __init__(self, root: str | Path | None, open_run: RunDir | None = None):
         super().__init__()
         self.root = root
         self.initial_run = open_run

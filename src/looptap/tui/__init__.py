@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from ..rundir import DEFAULT_ROOT, RunDir
+from ..rundir import RunDir
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -13,9 +13,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "run", nargs="?", help="run directory to open (default: show the run picker)"
     )
-    parser.add_argument(
-        "--root", default=str(DEFAULT_ROOT), help="directory containing runs"
-    )
+    parser.add_argument("--root", help="directory containing runs")
     args = parser.parse_args(argv)
 
     try:
@@ -35,4 +33,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"Not a run directory (no {RunDir.MANIFEST}): {rundir.path}"
             )
 
-    LooptapApp(args.root, rundir).run()
+    root = (
+        args.root
+        if args.root is not None
+        else (rundir.path.parent if rundir is not None else None)
+    )
+
+    LooptapApp(root, rundir).run()
