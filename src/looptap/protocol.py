@@ -185,6 +185,9 @@ class Plot:
     x_max: float | None = None
     y_min: float | None = None
     y_max: float | None = None
+    y_right: str | list[str] | None = None
+    y_right_min: float | None = None
+    y_right_max: float | None = None
 
     def sources(self) -> list[str]:
         return [self.x, *self.ys]
@@ -198,13 +201,13 @@ class Plot:
             )
 
         if isinstance(self.colour, list):
-            if len(self.colour) != len(self.ys):
+            if len(self.colour) != len(self.all_ys):
                 raise ValueError(
-                    f"Plot has {len(self.ys)} y series but {len(self.colour)} colours"
+                    f"Plot has {len(self.all_ys)} y series but {len(self.colour)} colours"
                 )
             for colour in self.colour:
                 check_colour(colour)
-        elif self.colour is not None and len(self.ys) > 1:
+        elif self.colour is not None and len(self.all_ys) > 1:
             raise ValueError(
                 "With several y series, give colour as a list, one colour per series"
             )
@@ -220,10 +223,21 @@ class Plot:
 
         check_limits(self.x_min, self.x_max, "x")
         check_limits(self.y_min, self.y_max, "y")
+        check_limits(self.y_right_min, self.y_right_max, "y_right")
 
     @property
     def ys(self) -> list[str]:
         return self.y if isinstance(self.y, list) else [self.y]
+
+    @property
+    def y_rights(self) -> list[str]:
+        if self.y_right is None:
+            return []
+        return self.y_right if isinstance(self.y_right, list) else [self.y_right]
+
+    @property
+    def all_ys(self) -> list[str]:
+        return [*self.ys, *self.y_rights]
 
     @property
     def colours(self) -> list[str | None]:

@@ -175,6 +175,7 @@ class ETAWidget(ViewWidget):
 class PlotWidget(ViewWidget):
     DEFAULT_CSS = """
     PlotWidget PlotextPlot {height: 8; }
+    PlotWidget:focus { border: round $accent; }
     """
 
     can_focus = True
@@ -182,58 +183,52 @@ class PlotWidget(ViewWidget):
     def __init__(self, view: Plot):
         super().__init__()
         self.view = view
-        self.title = view.title or ", ".join(view.ys)
+        self.names = view.all_ys
+        self.sides = ["left"] * len(view.ys) + ["right"] * len(view.y_rights)
+        self.title = view.title or ", ".join(self.names)
         self.border_title = self.title
         self.series = [
-            (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in view.ys
+            (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in self.names
         ]
-        self.latest: list[float | None] = [None] * len(view.ys)
-        self.x_override: tuple[float | None, float | None] | None = None
-        self.y_override: tuple[float | None, float | None] | None = None
+        self.latest: list[float | None] = [None] * len(self.names)
+        self.overrides: dict[str, tuple[float | None, float | None]] = {}
 
     def compose(self) -> ComposeResult:
         yield PlotextPlot()
 
-    @property
-    def x_limits(self) -> tuple[float | None, float | None]:
-        return (
-            self.x_override
-            if self.x_override is not None
-            else (self.view.x_min, self.view.x_max)
-        )
+    def declared_limits(self, axis: str) -> tuple[float | None, float | None]:
+        return {
+            "x": (self.view.x_min, self.view.x_max),
+            "y": (self.view.y_min, self.view.y_max),
+            "y_right": (self.view.y_right_min, self.view.y_right_max),
+        }[axis]
 
-    @property
-    def y_limits(self) -> tuple[float | None, float | None]:
-        return (
-            self.y_override
-            if self.y_override is not None
-            else (self.view.y_min, self.view.y_max)
-        )
+    def limits(self, axis: str) -> tuple[float | None, float | None]:
+        return self.overrides.get(axis, self.declared_limits(axis))
 
     def action_set_limits(self, axis: str) -> None:
         def apply(result: tuple[float | None, float | None] | str | None) -> None:
             if result is None:
                 return
 
-            override = None if result == "reset" else result
-            if axis == "x":
-                self.x_override = override  # ty: ignore[invalid-assignment]
+            if result == "reset":
+                self.overrides.pop(axis, None)
             else:
-                self.y_override = override  # ty: ignore[invalid-assignment]
+                self.overrides[axis] = result  # ty: ignore[invalid-assignment]
             self.redraw()
 
-        if axis == "x":
-            current, declared = self.x_limits, (self.view.x_min, self.view.x_max)
-        else:
-            current, declared = self.y_limits, (self.view.y_min, self.view.y_max)
-
-        self.app.push_screen(LimitsScreen(axis, self.title, current, declared), apply)
+        self.app.push_screen(
+            LimitsScreen(
+                axis, self.title, self.limits(axis), self.declared_limits(axis)
+            ),
+            apply,
+        )
 
     def apply_reports(self, reports: list[Report]) -> None:
         changed = False
         for report in reports:
             x = report.metrics.get(self.view.x)
-            for i, name in enumerate(self.view.ys):
+            for i, name in enumerate(self.names):
                 y = report.metrics.get(name)
                 if isinstance(y, float):
                     self.latest[i] = y
@@ -251,16 +246,16 @@ class PlotWidget(ViewWidget):
 
     def describe(self) -> str:
         values = [
-            f"{self.view.ys[0]}: {format_value(value)}"
-            if len(self.view.ys) == 1
-            else f"{name}: {format_value(value)}"
-            for name, value in zip(self.view.ys, self.latest)
+            f"{name}: {format_value(value)}"
+            for name, value in zip(self.names, self.latest)
             if value is not None
         ]
         return f"{' | '.join(values)}" if values else self.title
 
-    def fit_y_limits(self, ys: list[float]) -> tuple[float | None, float | None]:
-        low, high = self.y_limits
+    def fit_y_limits(
+        self, ys: list[float], limits: tuple[float | None, float | None]
+    ) -> tuple[float | None, float | None]:
+        low, high = limits
         if not ys or (low is None and high is None):
             return low, high
 
@@ -284,7 +279,7 @@ class PlotWidget(ViewWidget):
         plt = plot.plt
         plt.clear_data()
         plt.xlabel(self.view.x)
-        x_low, x_high = self.x_limits
+        x_low, x_high = self.limits("x")
         points = [
             [
                 (x, y)
@@ -297,11 +292,24 @@ class PlotWidget(ViewWidget):
             for xs, ys in self.series
         ]
         plt.xlim(x_low, x_high)
-        low, high = self.fit_y_limits([y for series in points for _, y in series])
-        plt.ylim(low, high)
+
+        y_limits = {}
+        for side, axis in (("left", "y"), ("right", "y_right")):
+            side_ys = [
+                y
+                for finite, s in zip(points, self.sides)
+                if s == side
+                for _, y in finite
+            ]
+            y_limits[side] = self.fit_y_limits(side_ys, self.limits(axis))
+            plt.ylim(*y_limits[side], yside=side)  # ty: ignore[invalid-argument-type]
+
         all_xs: list[float] = []
-        multiple = len(self.view.ys) > 1
-        for finite, name, colour in zip(points, self.view.ys, self.view.colours):
+        multiple = len(self.names) > 1
+        for finite, name, colour, side in zip(
+            points, self.names, self.view.colours, self.sides
+        ):
+            low, high = y_limits[side]
             if finite and (
                 (high is not None and all(y > high for _, y in finite))
                 or (low is not None and all(y < low for _, y in finite))
@@ -317,6 +325,7 @@ class PlotWidget(ViewWidget):
                     marker="braille",
                     color=plot_colour(colour),
                     label=name if multiple else None,
+                    yside=side,
                 )
 
                 all_xs.extend(px)
@@ -593,6 +602,9 @@ class ControlsPanel(VerticalScroll):
         self.query_one("#stop", Button).label = "Stop"
 
 
+AXIS_NAMES = {"x": "X", "y": "Y", "y_right": "Right Y"}
+
+
 class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
     BINDINGS = [("escape", "dismiss", "Cancel")]  # noqa: RUF012
     DEFAULT_CSS = """
@@ -629,7 +641,7 @@ class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
 
         with Vertical(id="limits"):
             yield Label(
-                f"{self.axis.upper()} range: {self.plot_title}", classes="heading"
+                f"{AXIS_NAMES[self.axis]} range: {self.plot_title}", classes="heading"
             )
             yield Static("Leave either blank to fit the data", classes="hint")
             yield Input(
@@ -761,6 +773,7 @@ class RunScreen(Screen[None]):
         ("i", "show_info", "Info"),
         ("x", "set_x_limits", "X range"),
         ("y", "set_y_limits", "Y range"),
+        ("u", "set_y_right_limits", "Right Y range"),
     ]
     CSS = """
     #status { height: 1; padding: 0 1; background: $boost; }
@@ -1055,6 +1068,11 @@ class RunScreen(Screen[None]):
         if action in ("set_x_limits", "set_y_limits"):
             return isinstance(self.focused, PlotWidget)
 
+        if action == "set_y_right_limits":
+            return isinstance(self.focused, PlotWidget) and bool(
+                self.focused.view.y_rights
+            )
+
         return True
 
     def action_set_x_limits(self) -> None:
@@ -1064,6 +1082,10 @@ class RunScreen(Screen[None]):
     def action_set_y_limits(self) -> None:
         if isinstance(self.focused, PlotWidget):
             self.focused.action_set_limits("y")
+
+    def action_set_y_right_limits(self) -> None:
+        if isinstance(self.focused, PlotWidget) and self.focused.view.y_rights:
+            self.focused.action_set_limits("y_right")
 
     def on_descendant_focus(self) -> None:
         self.refresh_bindings()
