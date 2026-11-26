@@ -25,7 +25,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             ) from e
         raise
 
-    rundir = None  # new
+    rundir = None
     if args.run:
         rundir = RunDir(args.run)
         if not rundir.manifest_path.is_file():
