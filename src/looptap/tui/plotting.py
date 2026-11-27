@@ -152,3 +152,18 @@ class RateTracker:
         (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
 
         return (v1 - v0) / (t1 - t0) if t1 > t0 else None
+
+
+class EMATracker:
+    def __init__(self, decay: float):
+        self.decay = decay
+        self.average = 0.0
+        self.weight = 0.0
+
+    def add(self, value: float) -> float | None:
+        if not math.isfinite(value):
+            return None
+
+        self.average = self.decay * self.average + (1 - self.decay) * value
+        self.weight = self.decay * self.weight + (1 - self.decay)
+        return self.average / self.weight

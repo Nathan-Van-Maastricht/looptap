@@ -3,10 +3,9 @@ from collections import deque
 from textual.app import ComposeResult
 from textual_plotext import PlotextPlot
 
-from looptap import Rate
-
 from ...protocol import (
     Plot,
+    Rate,
     Report,
     series_metric,
     series_name,
