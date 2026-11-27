@@ -14,13 +14,12 @@ from textual.widgets import (
     Static,
 )
 
-from looptap.tui.plotting import Axis, Limits
-
 from ..protocol import (
     Manifest,
     check_limits,
 )
 from ..rundir import RunDir
+from .plotting import Axis, Limits
 
 AXIS_NAMES = {"x": "X", "y": "Y", "y_right": "Right Y"}
 

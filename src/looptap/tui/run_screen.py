@@ -19,9 +19,6 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from looptap.tui.plotting import Axis, Limits
-from looptap.tui.status import Conn, StatusBar
-
 from ..client import Client
 from ..protocol import (
     EMA,
@@ -40,6 +37,8 @@ from ..rundir import RunDir
 from ..supervisor import log_tail, resume
 from .controls import ControlsPanel, ParamControl
 from .modals import InfoScreen, LimitsScreen, Reset
+from .plotting import Axis, Limits
+from .status import Conn, StatusBar
 from .views import CompactGrid, PlotWidget, ViewWidget, make_widget
 
 STARTUP_TIMEOUT = 600.0
