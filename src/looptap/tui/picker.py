@@ -72,7 +72,12 @@ class DirectoriesOnly(DirectoryTree):
 
 
 class DirectoryScreen(ModalScreen[Path | None]):
-    BINDINGS = [("d", "dismiss", "Cancel")]  # noqa: RUF012
+    BINDINGS = [  # noqa: RUF012
+        ("d", "dismiss", "Cancel"),
+        ("escape", "dismiss", "Cancel"),
+        ("s", "select_directory", "Select"),
+        ("u", "up", "Up"),
+    ]
     DEFAULT_CSS = """
     DirectoryScreen { align: center middle; }
     #directory {
@@ -100,9 +105,9 @@ class DirectoryScreen(ModalScreen[Path | None]):
             yield Input(str(self.start), id="directory-path")
             yield DirectoriesOnly(self.start, id="directory-tree")
             with Horizontal():
-                yield Button("Up", id="directory-up")
-                yield Button("Select", id="directory-select", variant="primary")
-                yield Button("Cancel", id="directory-cancel")
+                yield Button("Up (u)", id="directory-up")
+                yield Button("Select (s)", id="directory-select", variant="primary")
+                yield Button("Cancel (d)", id="directory-cancel")
 
     def on_mount(self) -> None:
         self.query_one("#directory-tree", DirectoriesOnly).focus()
@@ -113,7 +118,7 @@ class DirectoryScreen(ModalScreen[Path | None]):
             self.query_one("#directory-path", Input).value = str(event.node.data.path)
 
     @on(Button.Pressed, "#directory-up")
-    def up(self) -> None:
+    def action_up(self) -> None:
         tree = self.query_one("#directory-tree", DirectoriesOnly)
         parent = Path(tree.path).parent
         tree.path = parent
@@ -121,7 +126,7 @@ class DirectoryScreen(ModalScreen[Path | None]):
 
     @on(Button.Pressed, "#directory-select")
     @on(Input.Submitted, "#directory-path")
-    def select(self) -> None:
+    def action_select_directory(self) -> None:
         path = Path(self.query_one("#directory-path", Input).value.strip()).expanduser()
         if not path.is_dir():
             self.notify(f"Not a directory: {path}", severity="error")
@@ -220,7 +225,8 @@ class PickerScreen(Screen[None]):
 
         if infos:
             live = sum(info.state == "live" for info in infos)
-            status.update(f"{len(infos)} run, {live} live . Enter to open")
+            noun = "run" if len(infos) == 1 else "runs"
+            status.update(f"{len(infos)} {noun}, {live} live · Enter to open")
         else:
             status.update(f"No runs in {self.root}")
 
