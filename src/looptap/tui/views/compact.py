@@ -7,11 +7,14 @@ from textual.widgets import (
     Static,
 )
 
+from looptap.tui.plotting import RateTracker
+
 from ...protocol import (
     ETA,
     Rate,
     Report,
     Value,
+    series_name,
 )
 from ..formatting import format_duration, format_value
 from .base import ViewWidget
@@ -43,8 +46,8 @@ class RateWidget(ViewWidget):
     def __init__(self, view: Rate):
         super().__init__()
         self.view = view
-        self.border_title = view.label or f"{view.metric}/s"
-        self.recent: deque[tuple[float, float]] = deque(maxlen=max(1, view.window) + 1)
+        self.border_title = series_name(view)
+        self.tracker = RateTracker(view.window)
 
     def compose(self) -> ComposeResult:
         yield Static("-")
@@ -52,14 +55,15 @@ class RateWidget(ViewWidget):
     def apply_reports(self, reports: list[Report]) -> None:
         for report in reports:
             value = report.metrics.get(self.view.metric)
-            if isinstance(value, float) and math.isfinite(value):
-                self.recent.append((report.time, value))
 
-        if len(self.recent) < 2:
-            return
-        (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
-        if t1 > t0:
-            self.query_one(Static).update(f"{(v1 - v0) / (t1 - t0):,.2f}")
+            if isinstance(value, float):
+                latest = self.tracker.add(report.time, value)
+
+                if latest is not None:
+                    rate = latest
+
+        if rate is not None:
+            self.query_one(Static).update(f"{rate:,.2f}")
 
 
 class ETAWidget(ViewWidget):

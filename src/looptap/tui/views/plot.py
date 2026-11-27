@@ -3,13 +3,18 @@ from collections import deque
 from textual.app import ComposeResult
 from textual_plotext import PlotextPlot
 
+from looptap import Rate
+
 from ...protocol import (
     Plot,
     Report,
+    series_metric,
+    series_name,
 )
 from ..formatting import format_value
 from ..plotting import (
     Limits,
+    RateTracker,
     fit_y_limits,
     integer_x_ticks,
     outside_limits,
@@ -30,7 +35,11 @@ class PlotWidget(ViewWidget):
     def __init__(self, view: Plot):
         super().__init__()
         self.view = view
-        self.names = view.all_ys
+        self.names = [series_name(s) for s in view.all_ys]
+        self.metrics = [series_metric(s) for s in view.all_ys]
+        self.trackers = [
+            RateTracker(s.window) if isinstance(s, Rate) else None for s in view.all_ys
+        ]
         self.sides = ["left"] * len(view.ys) + ["right"] * len(view.y_rights)
         self.title = view.title or ", ".join(self.names)
         self.border_title = self.title
@@ -64,13 +73,22 @@ class PlotWidget(ViewWidget):
         changed = False
         for report in reports:
             x = report.metrics.get(self.view.x)
-            for i, name in enumerate(self.names):
-                y = report.metrics.get(name)
-                if isinstance(y, float):
-                    self.latest[i] = y
-                    changed = True
 
-                if isinstance(x, float) and isinstance(y, float):
+            for i, (metric, tracker) in enumerate(zip(self.metrics, self.trackers)):
+                value = report.metrics.get(metric)
+
+                if not isinstance(value, float):
+                    continue
+
+                y = value if tracker is None else tracker.add(report.time, value)
+
+                if y is None:
+                    continue
+
+                self.latest[i] = y
+                changed = True
+
+                if isinstance(x, float):
                     self.series[i][0].append(x)
                     self.series[i][1].append(y)
 

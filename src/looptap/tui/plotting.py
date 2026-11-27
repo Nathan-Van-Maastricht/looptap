@@ -1,5 +1,6 @@
 import bisect
 import math
+from collections import deque
 from collections.abc import Iterable
 
 from ..protocol import Histogram
@@ -137,3 +138,17 @@ def integer_x_ticks(xs: list[float], x_limits: Limits) -> list[float] | None:
     last = high if high is not None else max(xs)
 
     return int_ticks(math.ceil(first), math.floor(last))
+
+
+class RateTracker:
+    def __init__(self, window: int):
+        self.recent: deque[tuple[float, float]] = deque(maxlen=window + 1)
+
+    def add(self, time: float, value: float) -> float | None:
+        if not math.isfinite(value):
+            return None
+
+        self.recent.append((time, value))
+        (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
+
+        return (v1 - v0) / (t1 - t0) if t1 > t0 else None
