@@ -7,6 +7,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
+from textual.reactive import var
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -17,6 +18,9 @@ from textual.widgets import (
     Switch,
 )
 from textual.worker import get_current_worker
+
+from looptap.tui.plotting import Axis, Limits
+from looptap.tui.status import Conn, StatusBar
 
 from ..client import Client
 from ..protocol import (
@@ -35,7 +39,7 @@ from ..protocol import (
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
 from .controls import ControlsPanel, ParamControl
-from .modals import InfoScreen, LimitsScreen
+from .modals import InfoScreen, LimitsScreen, Reset
 from .views import CompactGrid, PlotWidget, ViewWidget, make_widget
 
 STARTUP_TIMEOUT = 600.0
@@ -62,6 +66,11 @@ class RunScreen(Screen[None]):
     #resume-text { width: 1fr; height: 3; content-align: left middle; }
     """
 
+    conn: var[Conn] = var(Conn.CONNECTING)
+    paused: var[bool] = var(False)
+    last_report_time: var[float | None] = var(None)
+    notice: var[str] = var("")
+
     class Incoming(TextualMessage):
         def __init__(self, payload: Message):
             super().__init__()
@@ -78,21 +87,21 @@ class RunScreen(Screen[None]):
         self.rundir = rundir
         self.client = Client(rundir)
         self.view_widgets: list[ViewWidget] = []
-        self.last_report_time: float | None = None
-        self.connected = False
-        self.notice = ""
         self.manifest: Manifest | None = None
-        self.paused = False
         self.pause_target: bool | None = None
         self.controls: ControlsPanel | None = None
         self.show_controls: bool = SHOW_CONTROLS
         self.process: subprocess.Popen[bytes] | None = None
-        self.starting = False
-        self.exiting = False
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("Connecting...", id="status")
+
+        yield StatusBar().data_bind(
+            RunScreen.conn,
+            RunScreen.paused,
+            RunScreen.last_report_time,
+            RunScreen.notice,
+        )
 
         with Horizontal(id="resume-bar"):
             yield Static("This run stopped with a checkpoint.", id="resume-text")
@@ -106,13 +115,12 @@ class RunScreen(Screen[None]):
     def on_mount(self) -> None:
         self.sub_title = self.rundir.name
         self.listen()
-        self.set_interval(1.0, self.refresh_status)
 
     def action_back(self) -> None:
         self.app.pop_screen()
 
     def on_unmount(self) -> None:
-        self.exiting = True
+        self.workers.cancel_node(self)
         self.client.close()
 
     @work(thread=True, exclusive=True)
@@ -162,7 +170,7 @@ class RunScreen(Screen[None]):
         except Exception as e:  # noqa: BLE001 - never crash UI
             reason = f"Connect error: {e}"
         show_log = False
-        if self.process is not None and not self.exiting:
+        if self.process is not None and not worker.is_cancelled:
             try:
                 code = self.process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
@@ -192,8 +200,7 @@ class RunScreen(Screen[None]):
 
     @on(Closed)
     async def handle_closed(self, event: Closed) -> None:
-        self.connected = False
-        self.starting = False
+        self.conn = Conn.DISCONNECTED
         self.notice = event.reason
         self.pause_target = None
 
@@ -218,12 +225,10 @@ class RunScreen(Screen[None]):
             await self.load_saved_run()
 
         self.refresh_bindings()
-        self.refresh_status()
 
     async def apply_manifest(self, manifest: Manifest) -> None:
-        self.connected = True
+        self.conn = Conn.LIVE
         self.sub_title = manifest.run_name
-        self.starting = False
         self.notice = ""
         self.paused = False
         self.pause_target = None
@@ -239,7 +244,6 @@ class RunScreen(Screen[None]):
             await self.ensure_controls()
 
         self.refresh_bindings()
-        self.refresh_status()
 
     async def build_views(self, manifest: Manifest) -> None:
         compact = self.query_one("#compact", CompactGrid)
@@ -280,8 +284,6 @@ class RunScreen(Screen[None]):
             widget.apply_reports(reports)
         self.last_report_time = reports[-1].time
 
-        self.refresh_status()
-
     def full_history(self, recent: list[Report]) -> list[Report]:
         whole_run = self.manifest is not None and any(
             (isinstance(view, Plot) and view.window is None) or isinstance(view, EMA)
@@ -316,10 +318,8 @@ class RunScreen(Screen[None]):
                 state, pause_pending=self.pause_target is not None
             )
 
-        self.refresh_status()
-
     def send(self, command: Command) -> bool:
-        if not self.connected:
+        if self.conn is not Conn.LIVE:
             self.notify("Not connected", severity="warning")
             return False
 
@@ -335,7 +335,7 @@ class RunScreen(Screen[None]):
         if action == "toggle_pause":
             if self.manifest is None or not self.manifest.pausable:
                 return False
-            return True if self.connected else None
+            return True if self.conn is Conn.LIVE else None
 
         if action == "toggle_controls":
             return self.controls is not None
@@ -351,7 +351,7 @@ class RunScreen(Screen[None]):
 
         return True
 
-    def action_set_limits(self, axis: str) -> None:
+    def action_set_limits(self, axis: Axis) -> None:
         plot = self.focused
 
         if not isinstance(plot, PlotWidget):
@@ -360,7 +360,7 @@ class RunScreen(Screen[None]):
         if axis == "y_right" and not plot.view.y_rights:
             return
 
-        def apply(result: tuple[float | None, float | None] | str | None) -> None:
+        def apply(result: Limits | Reset | None) -> None:
             if result is None:
                 return
 
@@ -407,8 +407,7 @@ class RunScreen(Screen[None]):
 
     def update_resume_bar(self) -> None:
         resumable = (
-            not self.connected
-            and not self.starting
+            self.conn is Conn.DISCONNECTED
             and self.rundir.resume_checkpoint() is not None
             and self.rundir.read_launch() is not None
         )
@@ -422,10 +421,9 @@ class RunScreen(Screen[None]):
             self.notify(f"Could not start the worker: {e}", severity="error")
             return
 
-        self.starting = True
+        self.conn = Conn.STARTING
         self.notice = "waiting for the worker to start; its output goes to worker.log"
         self.update_resume_bar()
-        self.refresh_status()
         self.listen(wait_for_worker=STARTUP_TIMEOUT)
 
     @on(Button.Pressed, "#stop")
@@ -460,21 +458,3 @@ class RunScreen(Screen[None]):
             self.notify(f"{control.param.name}: {e}", severity="error")
             return
         self.send(Command("set_param", control.param.name, value))
-
-    def refresh_status(self) -> None:
-        if self.starting:
-            parts = ["◌ Starting"]
-        elif not self.connected:
-            parts = ["○ Disconnected"]
-        elif self.paused:
-            parts = ["⏸ Paused"]
-        else:
-            parts = ["● Live"]
-
-        if self.connected and not self.paused and self.last_report_time is not None:
-            parts.append(f"Last report {time.time() - self.last_report_time:.0f}s ago")
-
-        if self.notice:
-            parts.append(self.notice)
-
-        self.query_one("#status", Static).update("  ·  ".join(parts))

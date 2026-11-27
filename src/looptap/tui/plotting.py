@@ -2,10 +2,13 @@ import bisect
 import math
 from collections import deque
 from collections.abc import Iterable
+from typing import Literal
 
 from ..protocol import Histogram
 
 Limits = tuple[float | None, float | None]
+Axis = Literal["x", "y", "y_right"]
+Side = Literal["left", "right"]
 Y_FALLBACK_MARGIN = 0.01
 
 
