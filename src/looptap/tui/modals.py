@@ -1,4 +1,5 @@
 import time
+from enum import Enum, auto
 from typing import Any
 
 from textual import on
@@ -12,6 +13,8 @@ from textual.widgets import (
     Label,
     Static,
 )
+
+from looptap.tui.plotting import Axis, Limits
 
 from ..protocol import (
     Manifest,
@@ -34,7 +37,11 @@ def flatten_config(config: dict[str, Any], prefix: str = "") -> list[tuple[str, 
     return items
 
 
-class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
+class Reset(Enum):
+    RESET = auto()
+
+
+class LimitsScreen(ModalScreen[Limits | Reset | None]):
     BINDINGS = [("escape", "dismiss", "Cancel")]  # noqa: RUF012
     DEFAULT_CSS = """
     LimitsScreen { align: center middle; }
@@ -53,7 +60,7 @@ class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
 
     def __init__(
         self,
-        axis: str,
+        axis: Axis,
         title: str,
         current: tuple[float | None, float | None],
         declared: tuple[float | None, float | None],
@@ -112,7 +119,7 @@ class LimitsScreen(ModalScreen[tuple[float | None, float | None] | str | None]):
 
     @on(Button.Pressed, "#limit-reset")
     def reset(self) -> None:
-        self.dismiss("reset")
+        self.dismiss(Reset.RESET)
 
     @on(Button.Pressed, "#limit-cancel")
     def cancel(self) -> None:

@@ -12,8 +12,10 @@ from ...protocol import (
 )
 from ..formatting import format_value
 from ..plotting import (
+    Axis,
     Limits,
     RateTracker,
+    Side,
     fit_y_limits,
     integer_x_ticks,
     outside_limits,
@@ -21,6 +23,8 @@ from ..plotting import (
     visible_points,
 )
 from .base import ViewWidget
+
+SIDE_AXES: tuple[tuple[Side, Axis], ...] = (("left", "y"), ("right", "y_right"))  # new
 
 
 class PlotWidget(ViewWidget):
@@ -39,33 +43,35 @@ class PlotWidget(ViewWidget):
         self.trackers = [
             RateTracker(s.window) if isinstance(s, Rate) else None for s in view.all_ys
         ]
-        self.sides = ["left"] * len(view.ys) + ["right"] * len(view.y_rights)
+        self.sides: list[Side] = ["left"] * len(view.ys) + ["right"] * len(
+            view.y_rights
+        )
         self.title = view.title or ", ".join(self.names)
         self.border_title = self.title
         self.series = [
             (deque(maxlen=view.window), deque(maxlen=view.window)) for _ in self.names
         ]
         self.latest: list[float | None] = [None] * len(self.names)
-        self.overrides: dict[str, tuple[float | None, float | None]] = {}
+        self.overrides: dict[Axis, Limits] = {}
 
     def compose(self) -> ComposeResult:
         yield PlotextPlot()
 
-    def set_override(self, axis: str, limits: Limits | None) -> None:
+    def set_override(self, axis: Axis, limits: Limits | None) -> None:
         if limits is None:
             self.overrides.pop(axis, None)
         else:
             self.overrides[axis] = limits
         self.redraw()
 
-    def declared_limits(self, axis: str) -> tuple[float | None, float | None]:
+    def declared_limits(self, axis: Axis) -> tuple[float | None, float | None]:
         return {
             "x": (self.view.x_min, self.view.x_max),
             "y": (self.view.y_min, self.view.y_max),
             "y_right": (self.view.y_right_min, self.view.y_right_max),
         }[axis]
 
-    def limits(self, axis: str) -> tuple[float | None, float | None]:
+    def limits(self, axis: Axis) -> tuple[float | None, float | None]:
         return self.overrides.get(axis, self.declared_limits(axis))
 
     def apply_reports(self, reports: list[Report]) -> None:
@@ -127,9 +133,9 @@ class PlotWidget(ViewWidget):
 
         plot.refresh()
 
-    def y_limits(self, points: list[list[tuple[float, float]]]) -> dict[str, Limits]:
-        limits = {}
-        for side, axis in (("left", "y"), ("right", "y_right")):
+    def y_limits(self, points: list[list[tuple[float, float]]]) -> dict[Side, Limits]:
+        limits: dict[Side, Limits] = {}
+        for side, axis in SIDE_AXES:
             side_ys = [
                 y
                 for series_points, s in zip(points, self.sides)
@@ -143,7 +149,7 @@ class PlotWidget(ViewWidget):
         self,
         plot: PlotextPlot,
         points: list[list[tuple[float, float]]],
-        y_limits: dict[str, Limits],
+        y_limits: dict[Side, Limits],
     ) -> list[float]:
         drawn_xs: list[float] = []
         multiple = len(self.names) > 1
