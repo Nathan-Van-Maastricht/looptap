@@ -226,7 +226,7 @@ class PickerScreen(Screen[None]):
         if infos:
             live = sum(info.state == "live" for info in infos)
             noun = "run" if len(infos) == 1 else "runs"
-            status.update(f"{len(infos)} {noun}, {live} live . Enter to open")
+            status.update(f"{len(infos)} {noun}, {live} live · Enter to open")
         else:
             status.update(f"No runs in {self.root}")
 
