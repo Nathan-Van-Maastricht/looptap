@@ -18,10 +18,9 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
-from looptap import EMA
-
 from ..client import Client
 from ..protocol import (
+    EMA,
     PROTOCOL_VERSION,
     Command,
     History,

@@ -7,9 +7,8 @@ from textual.widgets import (
     Static,
 )
 
-from looptap import EMA
-
 from ...protocol import (
+    EMA,
     ETA,
     Rate,
     Report,
