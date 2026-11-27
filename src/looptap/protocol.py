@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, BinaryIO, ClassVar
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 MetricValue = float | list[float]
 
@@ -62,8 +62,41 @@ class Rate:
     label: str | None = None
     window: int = 1
 
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.window, bool)
+            or not isinstance(self.window, int)
+            or self.window < 1
+        ):
+            raise ValueError(f"Rate window must be a positive int, got {self.window!r}")
+
     def sources(self) -> list[str]:
         return [self.metric]
+
+
+Series = str | Rate
+
+
+def series_metric(series: Series) -> str:
+    return series.metric if isinstance(series, Rate) else series
+
+
+def series_name(series: Series) -> str:
+    if isinstance(series, Rate):
+        return series.label or f"{series.metric}/s"
+
+    return series
+
+
+def _check_series(series: Series | list[Series], axis: str) -> None:
+    items = series if isinstance(series, list) else [series]
+
+    if not items or not all(
+        isinstance(s, Rate) or (isinstance(s, str) and s) for s in items
+    ):
+        raise ValueError(
+            f"Plot {axis} must be a metric name, a Rate, or a non-empty list of them, got {series!r}"
+        )
 
 
 @dataclass
@@ -177,7 +210,7 @@ class Plot:
     KIND: ClassVar[str] = "plot"
 
     x: str
-    y: str | list[str]
+    y: Series | list[Series]
     title: str | None = None
     window: int | None = None
     colour: str | list[str] | None = None
@@ -185,20 +218,17 @@ class Plot:
     x_max: float | None = None
     y_min: float | None = None
     y_max: float | None = None
-    y_right: str | list[str] | None = None
+    y_right: Series | list[Series] | None = None
     y_right_min: float | None = None
     y_right_max: float | None = None
 
     def sources(self) -> list[str]:
-        return [self.x, *self.ys]
+        return [self.x, *(series_metric(s) for s in self.all_ys)]
 
     def __post_init__(self) -> None:
-        if isinstance(self.y, list) and (
-            not self.y or not all(isinstance(name, str) and name for name in self.y)
-        ):
-            raise ValueError(
-                f"Plot y must be a metric name or a non-empty list of them, got {self.y!r}"
-            )
+        _check_series(self.y, "y")
+        if self.y_right is not None:
+            _check_series(self.y_right, "y_right")
 
         if isinstance(self.colour, list):
             if len(self.colour) != len(self.all_ys):
@@ -226,17 +256,17 @@ class Plot:
         check_limits(self.y_right_min, self.y_right_max, "y_right")
 
     @property
-    def ys(self) -> list[str]:
+    def ys(self) -> list[Series]:
         return self.y if isinstance(self.y, list) else [self.y]
 
     @property
-    def y_rights(self) -> list[str]:
+    def y_rights(self) -> list[Series]:
         if self.y_right is None:
             return []
         return self.y_right if isinstance(self.y_right, list) else [self.y_right]
 
     @property
-    def all_ys(self) -> list[str]:
+    def all_ys(self) -> list[Series]:
         return [*self.ys, *self.y_rights]
 
     @property
@@ -244,7 +274,7 @@ class Plot:
         return (
             self.colour
             if isinstance(self.colour, list)
-            else [self.colour] * len(self.ys)  # ty: ignore[invalid-explicit-return]
+            else [self.colour] * len(self.all_ys)  # ty: ignore[invalid-explicit-return]
         )
 
 
@@ -415,7 +445,13 @@ def check_colour(colour: str | None) -> None:
 def _view_to_dict(view: View) -> dict[str, Any]:
     if isinstance(view, UnknownView):
         return {"kind": view.kind, **view.data}
-    return {"kind": view.KIND, **asdict(view)}
+    data = {"kind": view.KIND, **asdict(view)}
+
+    if isinstance(view, Plot):
+        data["y"] = _series_to_json(view.y)
+        data["y_right"] = _series_to_json(view.y_right)
+
+    return data
 
 
 def _view_from_dict(data: dict[str, Any]) -> View:
@@ -424,7 +460,39 @@ def _view_from_dict(data: dict[str, Any]) -> View:
     cls = _VIEW_TYPES.get(kind)
     if cls is None:
         return UnknownView(kind=str(kind), data=data)
+
+    if cls is Plot:
+        for key in ("y", "y_right"):
+            if key in data:
+                data[key] = _series_from_json(data[key])
+
     return _build(cls, data)
+
+
+def _series_to_json(series: Series | list[Series] | None) -> Any:
+    if isinstance(series, list):
+        return [_series_to_json(s) for s in series]
+
+    if isinstance(series, Rate):
+        return _view_to_dict(series)
+
+    return series
+
+
+def _series_from_json(series: Any) -> Any:
+    if isinstance(series, list):
+        return [_series_from_json(s) for s in series]
+
+    if isinstance(series, dict):
+        data = dict(series)
+        kind = data.pop("kind", None)
+
+        if kind != Rate.KIND:
+            raise ValueError(f"Unknown plot series kind {kind!r}")
+
+        return _build(Rate, data)
+
+    return series
 
 
 def encode(message: Message) -> bytes:
