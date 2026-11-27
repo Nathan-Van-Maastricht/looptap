@@ -12,7 +12,18 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .controller import Controller, NullController, StopRun
-from .protocol import ETA, Bars, Histogram, Manifest, Param, Plot, Rate, Value, View
+from .protocol import (
+    EMA,
+    ETA,
+    Bars,
+    Histogram,
+    Manifest,
+    Param,
+    Plot,
+    Rate,
+    Value,
+    View,
+)
 from .rundir import DEFAULT_ROOT, RunDir
 from .server import Server
 
@@ -77,7 +88,7 @@ def _resume_command(rundir: RunDir) -> str:
 def _validate_views(views: Sequence[View], metrics: Sequence[str]) -> None:
     declared = set(metrics)
     for view in views:
-        if not isinstance(view, (Value, Rate, Plot, ETA, Bars, Histogram)):
+        if not isinstance(view, (Value, Rate, Plot, EMA, ETA, Bars, Histogram)):
             raise TypeError(f"Not a view: {view!r}")
 
         missing = [s for s in view.sources() if s not in declared]

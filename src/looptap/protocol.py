@@ -74,6 +74,28 @@ class Rate:
         return [self.metric]
 
 
+@dataclass
+class EMA:
+    KIND: ClassVar[str] = "ema"
+
+    metric: str
+    label: str | None = None
+    decay: float = 0.99
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.decay, bool)
+            or not isinstance(self.decay, (int, float))
+            or not 0 <= self.decay < 1
+        ):
+            raise ValueError(f"EMA decay must be a number in [0,1), got {self.decay!r}")
+
+        self.decay = float(self.decay)
+
+    def sources(self) -> list[str]:
+        return [self.metric]
+
+
 Series = str | Rate
 
 
@@ -287,9 +309,9 @@ class UnknownView:
         return []
 
 
-View = Value | Rate | ETA | Plot | Bars | Histogram | UnknownView
+View = Value | Rate | EMA | ETA | Plot | Bars | Histogram | UnknownView
 _VIEW_TYPES: dict[str, type] = {
-    cls.KIND: cls for cls in (Value, Rate, Plot, ETA, Bars, Histogram)
+    cls.KIND: cls for cls in (Value, Rate, Plot, EMA, ETA, Bars, Histogram)
 }
 
 

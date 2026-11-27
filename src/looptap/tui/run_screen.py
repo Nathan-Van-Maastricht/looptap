@@ -18,6 +18,8 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
+from looptap import EMA
+
 from ..client import Client
 from ..protocol import (
     PROTOCOL_VERSION,
@@ -283,7 +285,7 @@ class RunScreen(Screen[None]):
 
     def full_history(self, recent: list[Report]) -> list[Report]:
         whole_run = self.manifest is not None and any(
-            isinstance(view, Plot) and view.window is None
+            (isinstance(view, Plot) and view.window is None) or isinstance(view, EMA)
             for view in self.manifest.views
         )
 

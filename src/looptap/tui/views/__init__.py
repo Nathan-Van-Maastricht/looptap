@@ -1,12 +1,13 @@
-from ...protocol import ETA, Bars, Histogram, Plot, Rate, UnknownView, Value, View
+from ...protocol import EMA, ETA, Bars, Histogram, Plot, Rate, UnknownView, Value, View
 from .bars import BarsWidget, HistogramWidget
 from .base import CompactGrid, UnknownViewWidget, ViewWidget
-from .compact import ETAWidget, RateWidget, ValueWidget
+from .compact import EMAWidget, ETAWidget, RateWidget, ValueWidget
 from .plot import PlotWidget
 
 VIEW_WIDGETS: dict[type, type[ViewWidget]] = {
     Value: ValueWidget,
     Rate: RateWidget,
+    EMA: EMAWidget,
     ETA: ETAWidget,
     Plot: PlotWidget,
     Bars: BarsWidget,

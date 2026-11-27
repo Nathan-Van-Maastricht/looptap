@@ -7,7 +7,7 @@ from textual.widgets import (
     Static,
 )
 
-from looptap.tui.plotting import RateTracker
+from looptap import EMA
 
 from ...protocol import (
     ETA,
@@ -17,6 +17,7 @@ from ...protocol import (
     series_name,
 )
 from ..formatting import format_duration, format_value
+from ..plotting import EMATracker, RateTracker
 from .base import ViewWidget
 
 
@@ -53,6 +54,8 @@ class RateWidget(ViewWidget):
         yield Static("-")
 
     def apply_reports(self, reports: list[Report]) -> None:
+        rate: float | None = None
+
         for report in reports:
             value = report.metrics.get(self.view.metric)
 
@@ -64,6 +67,33 @@ class RateWidget(ViewWidget):
 
         if rate is not None:
             self.query_one(Static).update(f"{rate:,.2f}")
+
+
+class EMAWidget(ViewWidget):
+    COMPACT = True
+
+    def __init__(self, view: EMA):
+        super().__init__()
+        self.view = view
+        self.border_title = view.label or f"{view.metric} EMA"
+        self.tracker = EMATracker(view.decay)
+
+    def compose(self) -> ComposeResult:
+        yield Static("-")
+
+    def apply_reports(self, reports: list[Report]) -> None:
+        average: float | None = None
+
+        for report in reports:
+            value = report.metrics.get(self.view.metric)
+
+            if isinstance(value, float):
+                latest = self.tracker.add(value)
+                if latest is not None:
+                    average = latest
+
+        if average is not None:
+            self.query_one(Static).update(format_value(average))
 
 
 class ETAWidget(ViewWidget):
