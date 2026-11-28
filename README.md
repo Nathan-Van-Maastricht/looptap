@@ -2,7 +2,7 @@
 
 Watch and steer a running training loop from your terminal.
 
-![Example Screenshot](assets/live.png)
+![looptap attached to a live run](assets/live.png)
 
 ## Why?
 
@@ -13,8 +13,8 @@ looptap gives a training script a small control channel. The script reports its 
 ## How it fits together
 
 - **The script stays in charge.** It decides what to report, what can be changed, and when it's safe to apply changes. It runs the same whether or not the TUI is attached.
-- **The TUI is a visitor.** Attach to a live run, detach, reattach from another terminal. Closing it never affects training.
-- **Everything is local files.** Each run gets a directory with its metrics, declarations, and checkpoints, so finished and stopped runs can be browsed too. There's no server, account, or database.
+- **The TUI is a visitor.** Attach to a live run, detach, reattach from another terminal. Closing the TUI, or a slow or crashed one, never holds up training.
+- **Everything is local files.** Each run gets a directory with its metrics, declarations, and checkpoints, so finished and stopped runs can be browsed too. There's no server, account, or database. The TUI talks to a live run through a socket in that directory, so it runs on the same machine as training, over SSH if that machine is remote.
 
 ## Features
 
@@ -22,9 +22,12 @@ looptap gives a training script a small control channel. The script reports its 
 
 The script declares how its metrics are shown, and the TUI lays them out:
 
-- **Values, rates, and ETAs** in a row along the top, such as the current step, steps per second, and time until the run finishes.
-- **Line plots** of one or more series against any metric, such as training and validation loss against step, with the latest values in each plot's title. Plots can show the whole run or a rolling window, and their axis ranges can be fixed in the script or adjusted in the TUI.
+- **Values, rates, moving averages, and ETAs** in a grid along the top, such as the current step, steps per second, a smoothed loss, and the time and clock time the run should finish. An ETA's total can be fixed or come from another metric.
+- **Line plots** of one or more series against any metric, such as training and validation loss against step, with the latest values in each plot's title. A second axis on the right takes series on a different scale, and a series can be a rate, so throughput can sit beside loss. Plots can show the whole run or a rolling window, and their axis ranges can be fixed in the script or adjusted per plot in the TUI.
 - **Bar charts and histograms** of vector metrics, such as loss by timestep bin or a batch of sampled timesteps. Histogram bins can have unequal widths.
+- **View details:** select any view to see how it's defined, such as a moving average's decay or a plot's window and limits.
+
+Rates and moving averages are worked out by the TUI from the raw values the script reports, so they work the same on saved runs and nothing extra is written to disk.
 
 ### Control
 
@@ -35,20 +38,26 @@ The script declares how its metrics are shown, and the TUI lays them out:
 
 ### Stop and resume
 
-A script that tells looptap how to save and load its state can be stopped from the TUI: it saves a checkpoint, frees its GPU, and exits. Later it can be resumed from the TUI or the command line, carrying on from where it stopped, with the same settings and its earlier metrics still in the plots.
+A script that tells looptap how to save and load its state can be stopped from the TUI: it saves a checkpoint, frees its GPU, and exits. Later it can be resumed from the TUI or the command line, carrying on from where it stopped, with its params restored and its earlier metrics still in the plots.
+
+- **The previous checkpoint is kept** until the new one is safely in place, and a save that fails is reported while training continues.
+- **A resumed run uses the script as it is now,** so a fix made while the run was stopped takes effect. It starts from the same command line and working directory.
+- **Metrics reported after the checkpoint** are set aside rather than deleted, so the plots line up with the state the run resumed from.
 
 ### Runs
 
-![Run screen](assets/runs.png)
+![The run picker](assets/runs.png)
 
-- **A run picker** lists every run with its state (live, stopped and resumable, finished, crashed), when it last reported, and its headline values.
+- **A run picker** lists every run with its state (live, stopped and resumable, finished, crashed, interrupted, or running on another machine), when it last reported, and its headline values. It can browse to any runs directory.
 - **Saved runs** that aren't running can still be opened, showing everything they reported.
 - **Run info** shows when and where a run started, and the fixed configuration (hyperparameters) the script recorded for it.
 
 ## A taste
 
 ```python
-from looptap import Param, Plot, Rate, Value, run
+from looptap import EMA, Param, Plot, Rate, Value, run
+
+base_lr, batch_size, total_steps = 3e-4, 64, 100_000
 
 
 def train(ctl):
@@ -65,6 +74,7 @@ run(
     views=[
         Value("step"),
         Rate("step", label="steps/s"),
+        EMA("loss"),
         Plot(x="step", y="loss"),
     ],
     params=[Param("lr_scale", float, default=1.0, min=0)],
@@ -73,7 +83,7 @@ run(
 )
 ```
 
-Run the script as usual, then run `looptap` in another terminal on the same machine to pick a run and attach. In the TUI, `c` shows the controls, `i` shows the run's info, and Escape goes back to the list of runs.
+Run the script as usual, then run `looptap` in another terminal on the same machine to pick a run and attach. In the TUI, `c` shows the controls, `h` shows the run's info, `i` shows the details of the selected view, `r` goes back to the list of runs, and Escape quits.
 
 ## Installation
 
