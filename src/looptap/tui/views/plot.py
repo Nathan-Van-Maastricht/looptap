@@ -30,7 +30,6 @@ SIDE_AXES: tuple[tuple[Side, Axis], ...] = (("left", "y"), ("right", "y_right"))
 class PlotWidget(ViewWidget[Plot]):
     DEFAULT_CSS = """
     PlotWidget PlotextPlot {height: 8; }
-    PlotWidget:focus { border: round $accent; }
     """
 
     def __init__(self, view: Plot):
