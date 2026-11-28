@@ -33,8 +33,6 @@ class PlotWidget(ViewWidget[Plot]):
     PlotWidget:focus { border: round $accent; }
     """
 
-    can_focus = True
-
     def __init__(self, view: Plot):
         super().__init__()
         self.view = view
