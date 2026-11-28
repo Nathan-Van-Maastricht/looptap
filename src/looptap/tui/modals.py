@@ -16,9 +16,11 @@ from textual.widgets import (
 
 from ..protocol import (
     Manifest,
+    View,
     check_limits,
 )
 from ..rundir import RunDir
+from .formatting import view_details, view_kind
 from .plotting import Axis, Limits
 
 AXIS_NAMES = {"x": "X", "y": "Y", "y_right": "Right Y"}
@@ -126,7 +128,7 @@ class LimitsScreen(ModalScreen[Limits | Reset | None]):
 
 
 class InfoScreen(ModalScreen[None]):
-    BINDINGS = [("i", "dismiss", "Close")]  # noqa: RUF012
+    BINDINGS = [("h", "dismiss", "Close")]  # noqa: RUF012
     DEFAULT_CSS = """
     InfoScreen { align: center middle; }
     #info {
@@ -170,7 +172,7 @@ class InfoScreen(ModalScreen[None]):
             else:
                 yield Static("No config recorded for this run.")
 
-            yield Static("i to close", classes="hint")
+            yield Static("h to close", classes="hint")
 
     def on_mount(self) -> None:
         if self.manifest.config:
@@ -178,3 +180,50 @@ class InfoScreen(ModalScreen[None]):
             table.add_columns("Setting", "Value")
             for name, value in flatten_config(self.manifest.config):
                 table.add_row(name, str(value))
+
+
+class ViewDetailsScreen(ModalScreen[None]):
+    BINDINGS = [  # noqa: RUF012
+        ("i", "dismiss", "Close"),
+    ]
+
+    DEFAULT_CSS = """
+    ViewDetailsScreen { align: center middle; }
+    #details {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        border: round $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #details .heading { text-style: bold; }
+    #details .hint { color: $text-muted; margin-top: 1; }
+    #details .value { margin-top: 1; }
+    #details DataTable { height: auto; margin-top: 1; }
+    """
+
+    def __init__(self, title: str, view: View, value: str | None = None):
+        super().__init__()
+        self.view_title = title
+        self.view = view
+        self.value = value
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="details"):
+            yield Label(self.view_title, classes="heading", markup=False)
+            yield Static(view_kind(self.view), classes="hint")
+
+            if self.value is not None:
+                yield Static(
+                    f"{self.view_title}: {self.value}", classes="value", markup=False
+                )
+
+            yield DataTable(show_cursor=False, id="details-table")
+            yield Static("i to close", classes="hint")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#details-table", DataTable)
+        table.add_columns("Parameter", "Value")
+        for name, value in view_details(self.view):
+            table.add_row(name, value)

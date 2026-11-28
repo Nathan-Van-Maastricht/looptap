@@ -33,7 +33,7 @@ from ..protocol import (
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
 from .controls import ControlsPanel
-from .modals import InfoScreen, LimitsScreen, Reset
+from .modals import InfoScreen, LimitsScreen, Reset, ViewDetailsScreen
 from .plotting import Axis, Limits
 from .status import Conn, StatusBar
 from .views import CompactGrid, PlotWidget, ViewWidget, make_widget
@@ -48,7 +48,8 @@ class RunScreen(Screen[None]):
         ("r", "back", "Runs"),
         Binding("p", "toggle_pause", "Pause/Resume"),
         ("c", "toggle_controls", "Controls"),
-        ("i", "show_info", "Info"),
+        ("h", "show_info", "Info"),
+        ("i", "show_details", "Details"),
         ("x", "set_limits('x')", "X range"),
         ("y", "set_limits('y')", "Y range"),
         ("u", "set_limits('y_right')", "Right Y range"),
@@ -345,6 +346,9 @@ class RunScreen(Screen[None]):
 
             return parameters != ("y_right",) or bool(self.focused.view.y_rights)
 
+        if action == "show_details":
+            return isinstance(self.focused, ViewWidget)
+
         return True
 
     def action_set_limits(self, axis: Axis) -> None:
@@ -384,6 +388,16 @@ class RunScreen(Screen[None]):
     def action_show_info(self) -> None:
         if self.manifest is not None:
             self.app.push_screen(InfoScreen(self.rundir, self.manifest))
+
+    def action_show_details(self) -> None:
+        widget = self.focused
+
+        if isinstance(widget, ViewWidget):
+            self.app.push_screen(
+                ViewDetailsScreen(
+                    str(widget.border_title or ""), widget.view, widget.current
+                )
+            )
 
     def action_toggle_pause(self) -> None:
         if self.pause_target is not None:

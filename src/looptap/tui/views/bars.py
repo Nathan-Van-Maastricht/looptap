@@ -18,7 +18,7 @@ from ..plotting import (
 from .base import ViewWidget
 
 
-class BarsWidget(ViewWidget):
+class BarsWidget(ViewWidget[Bars | Histogram]):
     DEFAULT_CSS = """
     BarsWidget PlotextPlot { height: 10; }
     """
