@@ -1,7 +1,10 @@
 from typing import Any
 
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.message import Message
+from textual.timer import Timer
 from textual.widgets import (
     Button,
     Input,
@@ -11,6 +14,7 @@ from textual.widgets import (
 )
 
 from ..protocol import (
+    Command,
     Manifest,
     Param,
     State,
@@ -37,6 +41,29 @@ class ParamControl(Vertical):
             yield Switch(value=bool(self.confirmed))
         else:
             yield Input(value=str(self.confirmed), type=_INPUT_TYPES[self.param.type])  # type: ignore
+
+    @on(Input.Submitted)
+    def input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.submit(event.value)
+
+    @on(Switch.Changed)
+    def switch_changed(self, event: Switch.Changed) -> None:
+        event.stop()
+
+        if event.value != self.confirmed:
+            self.submit(event.value)
+
+    def submit(self, raw: Any) -> None:
+        try:
+            value = self.param.coerce(raw)
+        except ValueError as e:
+            self.notify(f"{self.param.name}: {e}", severity="error")
+            return
+
+        self.post_message(
+            ControlsPanel.CommandRequested(Command("set_param", self.param.name, value))
+        )
 
     def _describe(self) -> str:
         limits = [
@@ -74,11 +101,20 @@ class ControlsPanel(VerticalScroll):
     ControlsPanel Input { margin-top: 1; }
     """
 
+    class CommandRequested(Message):
+        def __init__(self, command: Command):
+            super().__init__()
+            self.command = command
+
+    class PauseToggled(Message):
+        pass
+
     def __init__(self, manifest: Manifest):
         super().__init__()
         self.manifest = manifest
         self.param_controls = {p.name: ParamControl(p) for p in manifest.params}
         self.stop_armed = False
+        self._disarm_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         stop = Button("Stop", id="stop", variant="error")
@@ -94,6 +130,27 @@ class ControlsPanel(VerticalScroll):
             yield Label("Actions", classes="heading")
             for action in self.manifest.actions:
                 yield Button(action, name=action, classes="action")
+
+    @on(Button.Pressed, "#stop")
+    def stop_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+
+        if not self.stop_armed:
+            self.arm_stop()
+            return
+
+        self.disarm_stop()
+        self.post_message(self.CommandRequested(Command("stop")))
+
+    @on(Button.Pressed, "#pause-toggle")
+    def pause_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.post_message(self.PauseToggled())
+
+    @on(Button.Pressed, ".action")
+    def action_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.post_message(self.CommandRequested(Command("action", event.button.name)))
 
     def apply_state(self, state: State, pause_pending: bool = False) -> None:
         self.query_one("#stop", Button).display = state.resumable
@@ -124,8 +181,12 @@ class ControlsPanel(VerticalScroll):
     def arm_stop(self) -> None:
         self.stop_armed = True
         self.query_one("#stop", Button).label = "Confirm stop"
-        self.set_timer(3.0, self.disarm_stop)
+        self._disarm_timer = self.set_timer(3.0, self.disarm_stop)
 
     def disarm_stop(self) -> None:
+        if self._disarm_timer is not None:
+            self._disarm_timer.stop()
+            self._disarm_timer = None
+
         self.stop_armed = False
         self.query_one("#stop", Button).label = "Stop"
