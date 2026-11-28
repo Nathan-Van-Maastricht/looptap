@@ -1,6 +1,5 @@
 import subprocess
 import time
-from typing import Any
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -13,9 +12,7 @@ from textual.widgets import (
     Button,
     Footer,
     Header,
-    Input,
     Static,
-    Switch,
 )
 from textual.worker import get_current_worker
 
@@ -35,7 +32,7 @@ from ..protocol import (
 )
 from ..rundir import RunDir
 from ..supervisor import log_tail, resume
-from .controls import ControlsPanel, ParamControl
+from .controls import ControlsPanel
 from .modals import InfoScreen, LimitsScreen, Reset
 from .plotting import Axis, Limits
 from .status import Conn, StatusBar
@@ -400,8 +397,12 @@ class RunScreen(Screen[None]):
         if self.controls is not None:
             self.controls.show_pause_pending(op)
 
-    @on(Button.Pressed, "#pause-toggle")
-    def pause_pressed(self) -> None:
+    @on(ControlsPanel.CommandRequested)
+    def command_requested(self, event: ControlsPanel.CommandRequested) -> None:
+        self.send(event.command)
+
+    @on(ControlsPanel.PauseToggled)
+    def pause_toggled(self) -> None:
         self.action_toggle_pause()
 
     def update_resume_bar(self) -> None:
@@ -424,36 +425,3 @@ class RunScreen(Screen[None]):
         self.notice = "waiting for the worker to start; its output goes to worker.log"
         self.update_resume_bar()
         self.listen(wait_for_worker=STARTUP_TIMEOUT)
-
-    @on(Button.Pressed, "#stop")
-    def stop_pressed(self) -> None:
-        assert self.controls is not None
-        if not self.controls.stop_armed:
-            self.controls.arm_stop()
-            return
-        self.controls.disarm_stop()
-        self.send(Command("stop"))
-
-    @on(Button.Pressed, ".action")
-    def action_pressed(self, event: Button.Pressed) -> None:
-        self.send(Command("action", event.button.name))
-
-    @on(Input.Submitted)
-    def param_submitted(self, event: Input.Submitted) -> None:
-        control = event.input.parent
-        if isinstance(control, ParamControl):
-            self.submit_param(control, event.value)
-
-    @on(Switch.Changed)
-    def param_switched(self, event: Switch.Changed) -> None:
-        control = event.switch.parent
-        if isinstance(control, ParamControl) and event.value != control.confirmed:
-            self.submit_param(control, event.value)
-
-    def submit_param(self, control: ParamControl, raw: Any) -> None:
-        try:
-            value = control.param.coerce(raw)
-        except ValueError as e:
-            self.notify(f"{control.param.name}: {e}", severity="error")
-            return
-        self.send(Command("set_param", control.param.name, value))
