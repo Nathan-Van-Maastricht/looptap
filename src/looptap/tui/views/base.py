@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 from textual.app import ComposeResult
 from textual.containers import Container, Vertical
 from textual.widgets import (
@@ -7,10 +9,13 @@ from textual.widgets import (
 from ...protocol import (
     Report,
     UnknownView,
+    View,
 )
 
+V = TypeVar("V", bound=View)
 
-class ViewWidget(Vertical):
+
+class ViewWidget[V](Vertical):
     DEFAULT_CSS = """
     ViewWidget {
         height: auto;
@@ -18,17 +23,22 @@ class ViewWidget(Vertical):
         padding: 0 1;
         margin-bottom: 1;
     }
+    ViewWidget:focus { border: round $accent; }
     """
 
     COMPACT = False
+    can_focus = True
+    view: V
+    current: str | None = None
 
     def apply_reports(self, reports: list[Report]) -> None:
         pass
 
 
-class UnknownViewWidget(ViewWidget):
+class UnknownViewWidget(ViewWidget[UnknownView]):
     def __init__(self, view: UnknownView):
         super().__init__()
+        self.view = view
         self.border_title = view.kind
 
     def compose(self) -> ComposeResult:

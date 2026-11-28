@@ -17,40 +17,39 @@ from ...protocol import (
 )
 from ..formatting import format_duration, format_value
 from ..plotting import EMATracker, RateTracker
-from .base import ViewWidget
+from .base import V, ViewWidget
 
 
-class ValueWidget(ViewWidget):
+class CompactWidget(ViewWidget[V]):
     COMPACT = True
 
+    def compose(self) -> ComposeResult:
+        yield Static("-")
+
+    def show(self, text: str) -> None:
+        self.current = text
+        self.query_one(Static).update(text)
+
+
+class ValueWidget(CompactWidget[Value]):
     def __init__(self, view: Value):
         super().__init__()
         self.view = view
         self.border_title = view.label or view.metric
 
-    def compose(self) -> ComposeResult:
-        yield Static("-")
-
     def apply_reports(self, reports: list[Report]) -> None:
         for report in reversed(reports):
             if self.view.metric in report.metrics:
-                self.query_one(Static).update(
-                    format_value(report.metrics[self.view.metric])
-                )
+                self.show(format_value(report.metrics[self.view.metric]))
                 return
 
 
-class RateWidget(ViewWidget):
-    COMPACT = True
-
+class RateWidget(CompactWidget[Rate]):
     def __init__(self, view: Rate):
         super().__init__()
         self.view = view
         self.border_title = series_name(view)
         self.tracker = RateTracker(view.window)
-
-    def compose(self) -> ComposeResult:
-        yield Static("-")
 
     def apply_reports(self, reports: list[Report]) -> None:
         rate: float | None = None
@@ -65,20 +64,15 @@ class RateWidget(ViewWidget):
                     rate = latest
 
         if rate is not None:
-            self.query_one(Static).update(f"{rate:,.2f}")
+            self.show(f"{rate:,.2f}")
 
 
-class EMAWidget(ViewWidget):
-    COMPACT = True
-
+class EMAWidget(CompactWidget[EMA]):
     def __init__(self, view: EMA):
         super().__init__()
         self.view = view
         self.border_title = view.label or f"{view.metric} EMA"
         self.tracker = EMATracker(view.decay)
-
-    def compose(self) -> ComposeResult:
-        yield Static("-")
 
     def apply_reports(self, reports: list[Report]) -> None:
         average: float | None = None
@@ -92,12 +86,10 @@ class EMAWidget(ViewWidget):
                     average = latest
 
         if average is not None:
-            self.query_one(Static).update(format_value(average))
+            self.show(format_value(average))
 
 
-class ETAWidget(ViewWidget):
-    COMPACT = True
-
+class ETAWidget(CompactWidget[ETA]):
     def __init__(self, view: ETA):
         super().__init__()
         self.view = view
@@ -106,9 +98,6 @@ class ETAWidget(ViewWidget):
         self.total: float | None = (
             None if isinstance(view.total, str) else float(view.total)
         )
-
-    def compose(self) -> ComposeResult:
-        yield Static("-")
 
     def apply_reports(self, reports: list[Report]) -> None:
         for report in reports:
@@ -119,23 +108,26 @@ class ETAWidget(ViewWidget):
                 total = report.metrics.get(self.view.total)
                 if isinstance(total, float) and math.isfinite(total):
                     self.total = total
+
         if not self.recent or self.total is None:
             return
 
-        text = self.query_one(Static)
         (t0, v0), (t1, v1) = self.recent[0], self.recent[-1]
+
         if v1 >= self.total:
-            text.update("done")
+            self.show("done")
             return
+
         rate = (v1 - v0) / (t1 - t0) if t1 > t0 else 0.0
         if rate <= 0:
-            text.update("-")  # not enough reports yet, or not progressing
+            self.show("-")
             return
+
         remaining = (self.total - v1) / rate
         finish = t1 + remaining
-        # Clock time it should finish; with the day too if that isn't today.
         same_day = time.localtime(finish)[:3] == time.localtime()[:3]
         clock = time.strftime(
             "%H:%M" if same_day else "%a %H:%M", time.localtime(finish)
         )
-        text.update(f"{format_duration(finish - time.time())}  (~{clock})")
+
+        self.show(f"{format_duration(finish - time.time())}  (~{clock})")

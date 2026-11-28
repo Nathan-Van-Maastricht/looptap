@@ -27,7 +27,7 @@ from .base import ViewWidget
 SIDE_AXES: tuple[tuple[Side, Axis], ...] = (("left", "y"), ("right", "y_right"))  # new
 
 
-class PlotWidget(ViewWidget):
+class PlotWidget(ViewWidget[Plot]):
     DEFAULT_CSS = """
     PlotWidget PlotextPlot {height: 8; }
     PlotWidget:focus { border: round $accent; }

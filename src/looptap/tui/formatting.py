@@ -1,6 +1,8 @@
+import dataclasses
 import math
+from typing import Any
 
-from ..protocol import MetricValue
+from ..protocol import MetricValue, Rate, UnknownView, View, series_name
 
 
 def format_value(value: MetricValue) -> str:
@@ -40,3 +42,29 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m {secs:02d}s"
     return f"{secs}s"
+
+
+def view_kind(view: View) -> str:
+    return view.kind if isinstance(view, UnknownView) else type(view).__name__
+
+
+def view_details(view: View) -> list[tuple[str, str]]:
+    if isinstance(view, UnknownView):
+        items = list(view.data.items())
+    else:
+        items = [(f.name, getattr(view, f.name)) for f in dataclasses.fields(view)]
+
+    return [(name, _format_detail(value)) for name, value in items if value is not None]
+
+
+def _format_detail(value: Any) -> str:
+    if isinstance(value, Rate):
+        return f"{series_name(value)} (rate, window) {value.window}"
+
+    if isinstance(value, list):
+        return ", ".join(_format_detail(v) for v in value)
+
+    if isinstance(value, float):
+        return f"{value:g}"
+
+    return str(value)
